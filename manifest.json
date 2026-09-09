@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "Korochin PageShot",
+  "version": "1.0.0",
+  "description": "表示中の領域、またはページ全体をショートカットでPNG保存します。",
+  "minimum_chrome_version": "118",
+  "permissions": ["activeTab", "downloads", "debugger", "storage"],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "Korochin PageShot",
+    "default_popup": "popup.html"
+  },
+  "commands": {
+    "capture-viewport": {
+      "suggested_key": {"default": "Ctrl+Shift+Y", "mac": "Command+Shift+Y"},
+      "description": "表示中の領域をPNG保存"
+    },
+    "capture-fullpage": {
+      "suggested_key": {"default": "Ctrl+Shift+U", "mac": "Command+Shift+U"},
+      "description": "ページ全体をPNG保存"
+    }
+  }
+}

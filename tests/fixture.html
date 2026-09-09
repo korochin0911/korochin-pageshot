@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="ja">
+<meta charset="utf-8">
+<title>PageShot キャプチャ確認ページ</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; min-width: 1800px; font: 24px sans-serif; color: #14352b; }
+  header { position: fixed; top: 0; left: 0; padding: 12px 24px; background: #14352b; color: white; z-index: 1; }
+  section { height: 900px; padding: 100px 50px; border-bottom: 8px solid #14352b; background: #e3efe7; }
+  section:nth-of-type(even) { background: #f4e7c9; }
+  .right { position: absolute; right: 20px; top: 110px; }
+  main { width: 100%; position: relative; }
+</style>
+<header>PageShot / 固定ヘッダー</header>
+<main>
+  <span class="right">RIGHT EDGE →</span>
+  <section><h1>START — ページの先頭</h1><p>幅1800px以上・高さ3600px。途中へスクロールして2種類の撮影を比較します。</p></section>
+  <section><h2>01 — 表示領域の確認</h2><p>表示領域の画像には、現在見えている内容だけが入ります。</p></section>
+  <section><h2>02 — 画面外の確認</h2><p>全体画像には先頭から末尾まで入ります。</p></section>
+  <section><h2>END — ページの末尾</h2><p>全体画像にこのマーカーが含まれることを確認してください。</p></section>
+</main>
+</html>
