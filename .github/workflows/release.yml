@@ -1,0 +1,43 @@
+name: Release extension
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Test
+        run: npm test
+
+      - name: Check syntax
+        run: npm run check
+
+      - name: Build release ZIP
+        shell: pwsh
+        run: |
+          $expectedVersion = $env:GITHUB_REF_NAME.TrimStart("v")
+          ./scripts/package.ps1 -ExpectedVersion $expectedVersion
+
+      - name: Create GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $asset = Get-ChildItem -LiteralPath dist -Filter "*.zip" | Select-Object -First 1
+          if (-not $asset) { throw "Release ZIP was not created." }
+          gh release create $env:GITHUB_REF_NAME $asset.FullName --verify-tag --generate-notes --title "PageShot $env:GITHUB_REF_NAME"
+          if ($LASTEXITCODE -ne 0) { throw "GitHub Release creation failed." }

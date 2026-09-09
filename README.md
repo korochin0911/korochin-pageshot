@@ -89,6 +89,25 @@ npm.cmd run check
 5. 保存・コピーそれぞれのポップアップボタンとショートカットを試します。コピー後、画像を扱えるアプリへ貼り付けられること、異なるウィンドウでも対象が正しいことを確認します。
 6. 全体撮影後にデバッグ通知が消えること、失敗時にポップアップに理由が出ることを確認します。
 
+## GitHub Releases用ZIP
+
+ローカルでは次のコマンドで、実行に必要なファイルだけを含むZIPを生成できます。
+
+```powershell
+npm.cmd run package
+```
+
+出力先は `dist/korochin-pageshot-v1.0.0.zip` です。ZIPにはバージョン付きのトップフォルダがあり、展開後にそのフォルダをChrome / Edgeの「パッケージ化されていない拡張機能を読み込む」で指定できます。`tests`、GitHub Actions、開発用ファイルは含みません。
+
+GitHubでは `manifest.json` と同じバージョンのタグをpushすると、テストと構文チェックを実行し、ZIPを添付したReleaseを自動作成します。
+
+```powershell
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+タグと `manifest.json` のバージョンが一致しない場合、誤ったリリースを防ぐためワークフローは失敗します。次回リリース時は、先に `manifest.json` と `package.json` のバージョンを同じ値へ更新してください。
+
 ## 公式リファレンス
 
 - [Tabs API / captureVisibleTab](https://developer.chrome.com/docs/extensions/reference/api/tabs#method-captureVisibleTab)
