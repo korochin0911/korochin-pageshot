@@ -10,12 +10,20 @@
 <body>
   <header><span class="mark" aria-hidden="true">▣</span><div><h1>PageShot</h1><p>Webページを、そのままPNGに。</p></div></header>
   <main>
-    <button class="capture" data-mode="viewport"><span class="label">表示中の領域<span class="description">今見えているWebページ部分だけ</span></span><kbd id="viewport-key">…</kbd></button>
-    <button class="capture" data-mode="fullpage"><span class="label">ページ全体<span class="description">画面外を含めて1枚に保存</span></span><kbd id="fullpage-key">…</kbd></button>
-    <p class="destination">保存先：ダウンロード / screenshots</p>
+    <h2>表示中の領域</h2>
+    <div class="actions">
+      <button class="capture" data-mode="viewport" data-destination="download"><span class="label">PNG保存</span><kbd id="capture-viewport-key">…</kbd></button>
+      <button class="capture" data-mode="viewport" data-destination="clipboard"><span class="label">コピー</span><kbd id="copy-viewport-key">…</kbd></button>
+    </div>
+    <h2>ページ全体</h2>
+    <div class="actions">
+      <button class="capture" data-mode="fullpage" data-destination="download"><span class="label">PNG保存</span><kbd id="capture-fullpage-key">…</kbd></button>
+      <button class="capture" data-mode="fullpage" data-destination="clipboard"><span class="label">コピー</span><kbd id="copy-fullpage-key">…</kbd></button>
+    </div>
+    <p class="destination">PNG保存先：ダウンロード / screenshots</p>
     <p id="status" role="status" aria-live="polite">撮影方法を選んでください。</p>
     <p class="note">全体撮影中はデバッグ接続の通知が表示されます。遅延読み込みの画像は、先にスクロールして読み込んでください。</p>
   </main>
-  <footer><button id="shortcuts" class="link">ショートカットを変更</button><span>PNG · ローカル保存</span></footer>
+  <footer><button id="shortcuts" class="link">ショートカットを変更</button><span>PNG · 保存 / コピー</span></footer>
 </body>
 </html>

@@ -1,4 +1,5 @@
 export const MODES = new Set(["viewport", "fullpage"]);
+export const DESTINATIONS = new Set(["download", "clipboard"]);
 
 export function filenameFor(mode, now = new Date()) {
   const pad = (n, size = 2) => String(n).padStart(size, "0");
@@ -16,21 +17,88 @@ export function clipFor(metrics) {
   return { x: rect.x, y: rect.y, width: Math.ceil(rect.width), height: Math.ceil(rect.height), scale: 1 };
 }
 
-export async function captureFullPage(api, tabId) {
+export function viewportFor(metrics, contentClip) {
+  const viewport = metrics.cssVisualViewport;
+  const width = Math.floor(viewport?.clientWidth);
+  const height = Math.floor(viewport?.clientHeight);
+  if (![width, height].every(Number.isFinite) || width <= 0 || height <= 0) return null;
+  return {
+    width: Math.min(width, contentClip.width),
+    height: Math.min(height, contentClip.height)
+  };
+}
+
+export function tileClips(contentClip, viewport) {
+  const tiles = [];
+  for (let y = 0; y < contentClip.height; y += viewport.height) {
+    for (let x = 0; x < contentClip.width; x += viewport.width) {
+      const width = Math.min(viewport.width, contentClip.width - x);
+      const height = Math.min(viewport.height, contentClip.height - y);
+      tiles.push({
+        x,
+        y,
+        width,
+        height,
+        clip: { x: contentClip.x + x, y: contentClip.y + y, width, height, scale: 1 }
+      });
+    }
+  }
+  return tiles;
+}
+
+async function capturePageTiles(api, target, contentClip, viewport) {
+  const tiles = [];
+  for (const tile of tileClips(contentClip, viewport)) {
+    const result = await api.debugger.sendCommand(target, "Page.captureScreenshot", {
+      format: "png",
+      fromSurface: true,
+      captureBeyondViewport: true,
+      clip: tile.clip
+    });
+    if (!result?.data) throw new Error("ページの分割画像を取得できませんでした。");
+    tiles.push({ ...tile, dataUrl: `data:image/png;base64,${result.data}` });
+  }
+  return tiles;
+}
+
+export async function captureFullPage(api, tabId, imageProcessor = null) {
   const target = { tabId };
   // Attach failures must not detach an existing session owned by DevTools/another extension.
   await api.debugger.attach(target, "1.3");
   let captureError;
   try {
     const metrics = await api.debugger.sendCommand(target, "Page.getLayoutMetrics");
+    const contentClip = clipFor(metrics);
+    const viewport = viewportFor(metrics, contentClip);
     const result = await api.debugger.sendCommand(target, "Page.captureScreenshot", {
       format: "png",
       fromSurface: true,
       captureBeyondViewport: true,
-      clip: clipFor(metrics)
+      clip: contentClip
     });
     if (!result?.data) throw new Error("ページの画像を取得できませんでした。");
-    return `data:image/png;base64,${result.data}`;
+    const dataUrl = `data:image/png;base64,${result.data}`;
+
+    if (imageProcessor && viewport && contentClip.height >= viewport.height * 1.8) {
+      let repeated = false;
+      try {
+        repeated = await imageProcessor.hasRepeatedViewport(dataUrl, {
+          contentHeight: contentClip.height,
+          viewportHeight: viewport.height
+        });
+      } catch {
+        // Analysis is an enhancement; a valid normal capture must remain usable.
+      }
+      if (repeated) {
+        await imageProcessor.onFallback?.();
+        const tiles = await capturePageTiles(api, target, contentClip, viewport);
+        return await imageProcessor.stitch(tiles, {
+          width: contentClip.width,
+          height: contentClip.height
+        });
+      }
+    }
+    return dataUrl;
   } catch (error) {
     captureError = error;
     throw error;
@@ -48,6 +116,9 @@ export async function captureFullPage(api, tabId) {
 
 export function explainError(error) {
   const detail = error?.message || String(error);
+  if (/clipboard|クリップボード|NotAllowedError/i.test(detail)) {
+    return `クリップボードにコピーできませんでした。拡張を再読み込みして再試行してください。\n${detail}`;
+  }
   if (/another debugger|already attached/i.test(detail)) {
     return "開発者ツール、または別の拡張がデバッグ接続中です。接続を閉じてから再試行してください。";
   }
@@ -60,12 +131,13 @@ export function explainError(error) {
   return `撮影できませんでした。ページ全体の場合は開発者ツールを閉じ、長いページでは表示領域の撮影もお試しください。\n${detail}`;
 }
 
-export function createCaptureService(api, publishStatus, now = () => Date.now()) {
+export function createCaptureService(api, publishStatus, now = () => Date.now(), copyImage = null, imageProcessor = null) {
   let busy = false;
   let lastVisibleCapture = -Infinity;
 
-  return async function capture(mode, requestedTab) {
+  return async function capture(mode, requestedTab, destination = "download") {
     if (!MODES.has(mode)) return { ok: false, error: "不明な撮影モードです。" };
+    if (!DESTINATIONS.has(destination)) return { ok: false, error: "不明な出力先です。" };
     if (busy) return { ok: false, error: "撮影処理中です。完了してから再試行してください。" };
     busy = true;
     try {
@@ -83,15 +155,22 @@ export function createCaptureService(api, publishStatus, now = () => Date.now())
         lastVisibleCapture = now();
         dataUrl = await api.tabs.captureVisibleTab(tab.windowId, { format: "png" });
       } else {
-        dataUrl = await captureFullPage(api, tab.id);
+        dataUrl = await captureFullPage(api, tab.id, imageProcessor);
       }
+      if (destination === "clipboard") {
+        if (!copyImage) throw new Error("クリップボード機能を利用できません。");
+        await copyImage(dataUrl, tab);
+        await publishStatus({ state: "copied", mode, destination, message: "PNGをクリップボードにコピーしました。" });
+        return { ok: true, destination };
+      }
+
       const filename = filenameFor(mode);
       const downloadId = await api.downloads.download({
         url: dataUrl, filename, saveAs: false, conflictAction: "uniquify"
       });
       // This API resolves when a download starts; it does not guarantee completion.
-      await publishStatus({ state: "started", mode, filename, downloadId, message: "PNGのダウンロードを開始しました。保存状況はブラウザのダウンロード一覧で確認できます。" });
-      return { ok: true, downloadId, filename };
+      await publishStatus({ state: "started", mode, destination, filename, downloadId, message: "PNGのダウンロードを開始しました。保存状況はブラウザのダウンロード一覧で確認できます。" });
+      return { ok: true, destination, downloadId, filename };
     } catch (error) {
       const message = explainError(error);
       await publishStatus({ state: "error", mode, message });

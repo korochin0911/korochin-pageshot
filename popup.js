@@ -16,7 +16,16 @@ for (const button of buttons) {
     buttons.forEach((item) => { item.disabled = true; });
     showStatus({ message: "撮影しています…" });
     try {
-      const result = await chrome.runtime.sendMessage({ type: "capture", mode: button.dataset.mode });
+      const request = chrome.runtime.sendMessage({
+        type: "capture", mode: button.dataset.mode, destination: button.dataset.destination
+      });
+      if (button.dataset.destination === "clipboard") {
+        // Return focus to the page so the injected Clipboard API call is allowed.
+        request.catch(() => {});
+        window.close();
+        return;
+      }
+      const result = await request;
       if (!result?.ok) showStatus({ state: "error", message: result?.error || "撮影を開始できませんでした。" });
     } catch (error) {
       showStatus({ state: "error", message: `拡張を再読み込みして再試行してください。\n${error.message}` });
@@ -37,8 +46,8 @@ try {
   const [commands, stored] = await Promise.all([
     chrome.commands.getAll(), chrome.storage.session.get("captureStatus")
   ]);
-  for (const mode of ["viewport", "fullpage"]) {
-    document.querySelector(`#${mode}-key`).textContent = commands.find((item) => item.name === `capture-${mode}`)?.shortcut || "未設定";
+  for (const command of ["capture-viewport", "copy-viewport", "capture-fullpage", "copy-fullpage"]) {
+    document.querySelector(`#${command}-key`).textContent = commands.find((item) => item.name === command)?.shortcut || "未設定";
   }
   showStatus(stored.captureStatus);
 } catch (error) {

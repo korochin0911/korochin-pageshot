@@ -4,8 +4,10 @@ body { width: 390px; margin: 0; padding: 22px; }
 header { display: flex; align-items: center; gap: 12px; margin-bottom: 22px; }
 .mark { color: #136f63; font-size: 38px; line-height: 1; }
 h1 { margin: 0; font-size: 23px; letter-spacing: -.6px; }
+h2 { margin: 14px 0 7px; font-size: 12px; color: #63736c; }
 header p { margin: 4px 0 0; font-size: 12px; color: #63736c; }
-.capture { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 8px; text-align: left; padding: 17px 14px; margin: 10px 0; border: 1px solid #cbd8d0; border-radius: 12px; color: inherit; background: #fff; cursor: pointer; }
+.actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.capture { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 8px; text-align: left; padding: 13px 12px; margin: 0; border: 1px solid #cbd8d0; border-radius: 10px; color: inherit; background: #fff; cursor: pointer; }
 .capture:hover { border-color: #136f63; background: #edf6f0; }
 .capture:disabled { opacity: .6; cursor: progress; }
 button:focus-visible { outline: 3px solid #1a8878; outline-offset: 3px; }
@@ -23,7 +25,7 @@ footer span { color: #63736c; font-size: 10px; }
   :root { color: #e2ede7; background: #17221d; }
   .capture { background: #213128; border-color: #425b4a; }
   .capture:hover { background: #2a3e32; border-color: #73c6ab; }
-  header p, .description, .destination, .note, footer span { color: #aec2b5; }
+  header p, h2, .description, .destination, .note, footer span { color: #aec2b5; }
   kbd { background: #17221d; border-color: #425b4a; }
   #status { background: #2a3e32; }
   #status.error { background: #4a241f; color: #ffb7a9; }

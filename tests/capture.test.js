@@ -1,11 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-import { captureFullPage, clipFor, createCaptureService, filenameFor } from "../capture.js";
+import { captureFullPage, clipFor, createCaptureService, filenameFor, tileClips, viewportFor } from "../capture.js";
+import { copyPngToClipboard } from "../clipboard.js";
+import { bandsAreRepeated } from "../image-analysis.js";
 
 function fixture() {
   const calls = [];
   const statuses = [];
+  const copies = [];
   const tab = { id: 42, windowId: 7 };
   const api = {
     tabs: {
@@ -24,17 +27,34 @@ function fixture() {
     },
     downloads: { download: async (options) => { calls.push(["download", options]); return 123; } }
   };
-  const run = createCaptureService(api, async (status) => { statuses.push(status); });
-  return { api, calls, statuses, tab, run };
+  const run = createCaptureService(
+    api,
+    async (status) => { statuses.push(status); },
+    () => Date.now(),
+    async (dataUrl) => { copies.push(dataUrl); }
+  );
+  return { api, calls, statuses, copies, tab, run };
 }
 
-test("manifest wires both commands and only declares required permissions", async () => {
+test("manifest wires save and copy commands and only declares required permissions", async () => {
   const manifest = JSON.parse(await readFile(new URL("../manifest.json", import.meta.url), "utf8"));
+  const background = await readFile(new URL("../background.js", import.meta.url), "utf8");
   assert.equal(manifest.manifest_version, 3);
-  assert.deepEqual(Object.keys(manifest.commands), ["capture-viewport", "capture-fullpage"]);
-  assert.deepEqual(manifest.permissions.sort(), ["activeTab", "debugger", "downloads", "storage"]);
+  assert.deepEqual(Object.keys(manifest.commands), [
+    "capture-viewport", "capture-fullpage", "copy-viewport", "copy-fullpage"
+  ]);
+  assert.deepEqual(manifest.permissions.sort(), [
+    "activeTab", "clipboardWrite", "debugger", "downloads", "offscreen", "scripting", "storage"
+  ]);
   assert.equal(manifest.host_permissions, undefined);
-  for (const name of [manifest.background.service_worker, manifest.action.default_popup]) {
+  assert.match(background, /scripting\.executeScript/);
+  assert.match(background, /offscreen\.createDocument/);
+  const shortcuts = Object.values(manifest.commands).map((command) => command.suggested_key.default);
+  assert.equal(new Set(shortcuts).size, 4);
+  for (const name of [
+    manifest.background.service_worker, manifest.action.default_popup,
+    "clipboard.js", "image-analysis.js", "offscreen.html", "offscreen.js"
+  ]) {
     assert.ok((await readFile(new URL(`../${name}`, import.meta.url))).length);
   }
 });
@@ -65,6 +85,153 @@ test("full page uses CSS content dimensions and detaches before downloading", as
   });
   assert.ok(f.calls.findIndex(([name]) => name === "detach") < f.calls.findIndex(([name]) => name === "download"));
   assert.equal(f.calls.find(([name]) => name === "download")[1].url, "data:image/png;base64,FULL");
+});
+
+test("viewport and tile clips cover the content without gaps", () => {
+  const content = { x: -5, y: 10, width: 1200, height: 1700, scale: 1 };
+  const viewport = viewportFor({ cssVisualViewport: { clientWidth: 800.8, clientHeight: 700.9 } }, content);
+  assert.deepEqual(viewport, { width: 800, height: 700 });
+  assert.deepEqual(tileClips(content, viewport), [
+    { x: 0, y: 0, width: 800, height: 700, clip: { x: -5, y: 10, width: 800, height: 700, scale: 1 } },
+    { x: 800, y: 0, width: 400, height: 700, clip: { x: 795, y: 10, width: 400, height: 700, scale: 1 } },
+    { x: 0, y: 700, width: 800, height: 700, clip: { x: -5, y: 710, width: 800, height: 700, scale: 1 } },
+    { x: 800, y: 700, width: 400, height: 700, clip: { x: 795, y: 710, width: 400, height: 700, scale: 1 } },
+    { x: 0, y: 1400, width: 800, height: 300, clip: { x: -5, y: 1410, width: 800, height: 300, scale: 1 } },
+    { x: 800, y: 1400, width: 400, height: 300, clip: { x: 795, y: 1410, width: 400, height: 300, scale: 1 } }
+  ]);
+  assert.equal(viewportFor({}, content), null);
+});
+
+test("repeated full-page output falls back to viewport-sized tiles", async () => {
+  const f = fixture();
+  let captures = 0;
+  f.api.debugger.sendCommand = async (target, method, params) => {
+    f.calls.push([method, target, params]);
+    if (method === "Page.getLayoutMetrics") {
+      return {
+        cssContentSize: { x: 0, y: 0, width: 1200, height: 1700 },
+        cssVisualViewport: { clientWidth: 1200, clientHeight: 700 }
+      };
+    }
+    captures += 1;
+    return { data: `CAPTURE-${captures}` };
+  };
+  let fallbackNotified = false;
+  const processor = {
+    hasRepeatedViewport: async (dataUrl, dimensions) => {
+      assert.equal(dataUrl, "data:image/png;base64,CAPTURE-1");
+      assert.deepEqual(dimensions, { contentHeight: 1700, viewportHeight: 700 });
+      return true;
+    },
+    onFallback: async () => { fallbackNotified = true; },
+    stitch: async (tiles, dimensions) => {
+      assert.deepEqual(dimensions, { width: 1200, height: 1700 });
+      assert.deepEqual(tiles.map(({ y, height, dataUrl }) => ({ y, height, dataUrl })), [
+        { y: 0, height: 700, dataUrl: "data:image/png;base64,CAPTURE-2" },
+        { y: 700, height: 700, dataUrl: "data:image/png;base64,CAPTURE-3" },
+        { y: 1400, height: 300, dataUrl: "data:image/png;base64,CAPTURE-4" }
+      ]);
+      return "data:image/png;base64,STITCHED";
+    }
+  };
+  assert.equal(await captureFullPage(f.api, 42, processor), "data:image/png;base64,STITCHED");
+  assert.equal(fallbackNotified, true);
+  assert.equal(f.calls.filter(([name]) => name === "Page.captureScreenshot").length, 4);
+  assert.equal(f.calls.filter(([name]) => name === "detach").length, 1);
+});
+
+test("image analysis failure keeps the valid one-shot capture", async () => {
+  const f = fixture();
+  f.api.debugger.sendCommand = async (target, method, params) => {
+    f.calls.push([method, target, params]);
+    return method === "Page.getLayoutMetrics"
+      ? {
+          cssContentSize: { x: 0, y: 0, width: 1200, height: 1700 },
+          cssVisualViewport: { clientWidth: 1200, clientHeight: 700 }
+        }
+      : { data: "FULL" };
+  };
+  const processor = {
+    hasRepeatedViewport: async () => { throw new Error("analysis unavailable"); },
+    stitch: async () => assert.fail("must not stitch")
+  };
+  assert.equal(await captureFullPage(f.api, 42, processor), "data:image/png;base64,FULL");
+  assert.equal(f.calls.filter(([name]) => name === "Page.captureScreenshot").length, 1);
+});
+
+test("image repetition detection tolerates tiny pixel noise but rejects different bands", () => {
+  const first = new Uint8ClampedArray(400).fill(100);
+  const almostSame = new Uint8ClampedArray(first);
+  almostSame[0] = 106;
+  assert.equal(bandsAreRepeated(first, almostSame), true);
+
+  const different = new Uint8ClampedArray(first);
+  for (let index = 0; index < different.length; index += 8) different[index] = 180;
+  assert.equal(bandsAreRepeated(first, different), false);
+  assert.equal(bandsAreRepeated(first, new Uint8ClampedArray(4)), false);
+});
+
+test("clipboard destination copies the PNG without starting a download", async () => {
+  const f = fixture();
+  let copiedTab;
+  const run = createCaptureService(
+    f.api,
+    async (status) => { f.statuses.push(status); },
+    () => Date.now(),
+    async (dataUrl, tab) => { f.copies.push(dataUrl); copiedTab = tab; }
+  );
+  const result = await run("viewport", f.tab, "clipboard");
+  assert.deepEqual(result, { ok: true, destination: "clipboard" });
+  assert.deepEqual(f.copies, ["data:image/png;base64,VIEW"]);
+  assert.equal(copiedTab, f.tab);
+  assert.ok(!f.calls.some(([name]) => name === "download"));
+  assert.equal(f.statuses.at(-1).state, "copied");
+});
+
+test("clipboard output writes one PNG ClipboardItem", async () => {
+  const blob = { type: "image/png" };
+  const writes = [];
+  class FakeClipboardItem {
+    constructor(data) { this.data = data; }
+  }
+  const result = await copyPngToClipboard("data:image/png;base64,VIEW", {
+    fetcher: async (url) => {
+      assert.equal(url, "data:image/png;base64,VIEW");
+      return { blob: async () => blob };
+    },
+    clipboard: { write: async (items) => { writes.push(items); } },
+    ClipboardItemCtor: FakeClipboardItem,
+    skipFocusCheck: true
+  });
+  assert.deepEqual(result, { ok: true });
+  assert.equal(writes.length, 1);
+  assert.equal(writes[0].length, 1);
+  assert.equal(writes[0][0].data["image/png"], blob);
+});
+
+test("clipboard output rejects non-PNG data", async () => {
+  const result = await copyPngToClipboard("bad", {
+    fetcher: async () => ({ blob: async () => ({ type: "text/plain" }) }),
+    clipboard: { write: async () => assert.fail("must not write") },
+    ClipboardItemCtor: class {},
+    skipFocusCheck: true
+  });
+  assert.equal(result.ok, false);
+  assert.match(result.error, /PNGではありません/);
+});
+
+test("clipboard failures are reported and do not fall back to downloading", async () => {
+  const f = fixture();
+  const run = createCaptureService(
+    f.api,
+    async (status) => { f.statuses.push(status); },
+    () => Date.now(),
+    async () => { throw new Error("Clipboard write failed"); }
+  );
+  const result = await run("fullpage", f.tab, "clipboard");
+  assert.equal(result.ok, false);
+  assert.match(result.error, /クリップボードにコピーできませんでした/);
+  assert.ok(!f.calls.some(([name]) => name === "download"));
 });
 
 test("clip preserves negative content origins and rounds fractional dimensions up", () => {
@@ -115,6 +282,7 @@ test("missing tab and unknown mode never initiate capture", async () => {
   f.api.tabs.query = async () => [];
   assert.equal((await f.run("viewport")).ok, false);
   assert.equal((await f.run("other")).ok, false);
+  assert.equal((await f.run("viewport", f.tab, "other")).ok, false);
   assert.equal(f.calls.length, 0);
 });
 
