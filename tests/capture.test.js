@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { captureFullPage, clipFor, createCaptureService, filenameFor, tileClips, viewportFor } from "../capture.js";
-import { copyPngToClipboard } from "../clipboard.js";
+import { copyDocumentTitleToClipboard, copyPngToClipboard } from "../clipboard.js";
 import { bandsAreRepeated } from "../image-analysis.js";
 
 function fixture() {
@@ -41,7 +41,7 @@ test("manifest wires save and copy commands and only declares required permissio
   const background = await readFile(new URL("../background.js", import.meta.url), "utf8");
   assert.equal(manifest.manifest_version, 3);
   assert.deepEqual(Object.keys(manifest.commands), [
-    "capture-viewport", "capture-fullpage", "copy-viewport", "copy-fullpage"
+    "capture-viewport", "capture-fullpage", "copy-viewport", "copy-fullpage", "copy-title"
   ]);
   assert.deepEqual(manifest.permissions.sort(), [
     "activeTab", "clipboardWrite", "debugger", "downloads", "offscreen", "scripting", "storage"
@@ -49,7 +49,10 @@ test("manifest wires save and copy commands and only declares required permissio
   assert.equal(manifest.host_permissions, undefined);
   assert.match(background, /scripting\.executeScript/);
   assert.match(background, /offscreen\.createDocument/);
-  const shortcuts = Object.values(manifest.commands).map((command) => command.suggested_key.default);
+  assert.equal(manifest.commands["copy-title"].suggested_key, undefined);
+  const shortcuts = Object.values(manifest.commands)
+    .filter((command) => command.suggested_key)
+    .map((command) => command.suggested_key.default);
   assert.equal(new Set(shortcuts).size, 4);
   for (const name of [
     manifest.background.service_worker, manifest.action.default_popup,
@@ -218,6 +221,27 @@ test("clipboard output rejects non-PNG data", async () => {
   });
   assert.equal(result.ok, false);
   assert.match(result.error, /PNGではありません/);
+});
+
+test("document title is copied as plain text", async () => {
+  const writes = [];
+  const result = await copyDocumentTitleToClipboard({
+    document: { title: "PageShot キャプチャ確認ページ", hasFocus: () => true },
+    clipboard: { writeText: async (text) => { writes.push(text); } },
+    skipFocusCheck: true
+  });
+  assert.deepEqual(result, { ok: true, title: "PageShot キャプチャ確認ページ" });
+  assert.deepEqual(writes, ["PageShot キャプチャ確認ページ"]);
+});
+
+test("missing document title is reported without writing to the clipboard", async () => {
+  const result = await copyDocumentTitleToClipboard({
+    document: { title: "", hasFocus: () => true },
+    clipboard: { writeText: async () => assert.fail("must not write") },
+    skipFocusCheck: true
+  });
+  assert.equal(result.ok, false);
+  assert.match(result.error, /タイトルがありません/);
 });
 
 test("clipboard failures are reported and do not fall back to downloading", async () => {

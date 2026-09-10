@@ -24,3 +24,25 @@ export async function copyPngToClipboard(dataUrl, dependencies = {}) {
     return { ok: false, error: error?.message || String(error) };
   }
 }
+
+export async function copyDocumentTitleToClipboard(dependencies = {}) {
+  try {
+    const pageDocument = dependencies.document ?? globalThis.document;
+    const clipboard = dependencies.clipboard ?? globalThis.navigator?.clipboard;
+    const title = pageDocument?.title ?? "";
+    if (!title) throw new Error("このページにはタイトルがありません。");
+    if (!clipboard?.writeText) throw new Error("クリップボードAPIを利用できません。");
+
+    if (!dependencies.skipFocusCheck) {
+      for (let attempt = 0; attempt < 20 && !pageDocument.hasFocus(); attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      if (!pageDocument.hasFocus()) throw new Error("コピー元のページにフォーカスがありません。");
+    }
+
+    await clipboard.writeText(title);
+    return { ok: true, title };
+  } catch (error) {
+    return { ok: false, error: error?.message || String(error) };
+  }
+}

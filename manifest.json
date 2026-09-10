@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Korochin PageShot",
-  "version": "1.0.0",
-  "description": "表示中の領域、またはページ全体をショートカットでPNG保存・クリップボードコピーします。",
+  "version": "1.1.0",
+  "description": "表示領域・ページ全体のPNG撮影とページタイトルのコピーをショートカットで実行します。",
   "minimum_chrome_version": "118",
   "permissions": ["activeTab", "clipboardWrite", "debugger", "downloads", "offscreen", "scripting", "storage"],
   "background": {
@@ -29,6 +29,9 @@
     "copy-fullpage": {
       "suggested_key": {"default": "Alt+Shift+U", "mac": "Alt+Shift+U"},
       "description": "ページ全体をクリップボードにコピー"
+    },
+    "copy-title": {
+      "description": "ページタイトルをクリップボードにコピー"
     }
   }
 }

@@ -1,5 +1,5 @@
 import { createCaptureService, DESTINATIONS, MODES } from "./capture.js";
-import { copyPngToClipboard } from "./clipboard.js";
+import { copyDocumentTitleToClipboard, copyPngToClipboard } from "./clipboard.js";
 
 const OFFSCREEN_DOCUMENT = "offscreen.html";
 let creatingOffscreenDocument;
@@ -60,6 +60,28 @@ async function publishStatus(status) {
 
 const capture = createCaptureService(chrome, publishStatus, () => Date.now(), copyImageToClipboard, imageProcessor);
 
+async function copyPageTitle(requestedTab) {
+  try {
+    const tab = requestedTab ?? (await chrome.tabs.query({ active: true, lastFocusedWindow: true }))[0];
+    if (!Number.isInteger(tab?.id) || tab.id < 0) throw new Error("タイトルを取得するタブが見つかりません。");
+    await publishStatus({ state: "capturing", operation: "copy-title", message: "ページタイトルを取得しています…" });
+    const [{ result } = {}] = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      func: copyDocumentTitleToClipboard
+    });
+    if (!result?.ok) throw new Error(result?.error || "ページタイトルをコピーできませんでした。");
+    await publishStatus({
+      state: "copied", operation: "copy-title", message: `ページタイトルをコピーしました。\n${result.title}`
+    });
+    return { ok: true, title: result.title };
+  } catch (error) {
+    const detail = error?.message || String(error);
+    const message = `ページタイトルをコピーできませんでした。通常のWebページで再試行してください。\n${detail}`;
+    await publishStatus({ state: "error", operation: "copy-title", message });
+    return { ok: false, error: message };
+  }
+}
+
 chrome.commands.onCommand.addListener((command, tab) => {
   const action = {
     "capture-viewport": ["viewport", "download"],
@@ -68,10 +90,15 @@ chrome.commands.onCommand.addListener((command, tab) => {
     "copy-fullpage": ["fullpage", "clipboard"]
   }[command];
   if (action) void capture(action[0], tab, action[1]);
+  if (command === "copy-title") void copyPageTitle(tab);
 });
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (sender.id !== chrome.runtime.id || sender.url !== chrome.runtime.getURL("popup.html")) return;
+  if (message?.type === "copy-title") {
+    copyPageTitle().then(sendResponse, (error) => sendResponse({ ok: false, error: String(error) }));
+    return true;
+  }
   if (message?.type !== "capture" || !MODES.has(message.mode) || !DESTINATIONS.has(message.destination)) return;
   // Keep the popup open until the operation finishes so errors are visible.
   // Extension popups are browser UI, outside the captured page surface.

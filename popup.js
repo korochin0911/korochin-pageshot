@@ -14,12 +14,13 @@ chrome.storage.onChanged.addListener((changes, area) => {
 for (const button of buttons) {
   button.addEventListener("click", async () => {
     buttons.forEach((item) => { item.disabled = true; });
-    showStatus({ message: "撮影しています…" });
+    const copiesTitle = button.dataset.action === "copy-title";
+    showStatus({ message: copiesTitle ? "ページタイトルを取得しています…" : "撮影しています…" });
     try {
-      const request = chrome.runtime.sendMessage({
+      const request = chrome.runtime.sendMessage(copiesTitle ? { type: "copy-title" } : {
         type: "capture", mode: button.dataset.mode, destination: button.dataset.destination
       });
-      if (button.dataset.destination === "clipboard") {
+      if (copiesTitle || button.dataset.destination === "clipboard") {
         // Return focus to the page so the injected Clipboard API call is allowed.
         request.catch(() => {});
         window.close();
@@ -46,7 +47,7 @@ try {
   const [commands, stored] = await Promise.all([
     chrome.commands.getAll(), chrome.storage.session.get("captureStatus")
   ]);
-  for (const command of ["capture-viewport", "copy-viewport", "capture-fullpage", "copy-fullpage"]) {
+  for (const command of ["capture-viewport", "copy-viewport", "capture-fullpage", "copy-fullpage", "copy-title"]) {
     document.querySelector(`#${command}-key`).textContent = commands.find((item) => item.name === command)?.shortcut || "未設定";
   }
   showStatus(stored.captureStatus);
