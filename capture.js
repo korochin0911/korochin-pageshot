@@ -46,17 +46,84 @@ export function tileClips(contentClip, viewport) {
   return tiles;
 }
 
+export function overlappingTileClips(contentClip, viewport) {
+  const overlap = Math.min(200, Math.floor(viewport.height / 4));
+  const step = viewport.height - overlap;
+  const lastStart = Math.max(0, contentClip.height - viewport.height);
+  const starts = [0];
+  for (let y = step; y < lastStart; y += step) starts.push(y);
+  if (lastStart > 0) starts.push(lastStart);
+
+  const tiles = [];
+  for (let row = 0; row < starts.length; row++) {
+    const y = row === 0 ? 0 : starts[row - 1] + viewport.height;
+    const height = Math.min(contentClip.height, starts[row] + viewport.height) - y;
+    if (height <= 0) continue;
+    for (let x = 0; x < contentClip.width; x += viewport.width) {
+      const width = Math.min(viewport.width, contentClip.width - x);
+      tiles.push({
+        x, y, width, height,
+        captureY: contentClip.y + starts[row],
+        clip: { x: contentClip.x + x, y: contentClip.y + y, width, height, scale: 1 }
+      });
+    }
+  }
+  return tiles;
+}
+
+async function evaluatePage(api, target, expression) {
+  const response = await api.debugger.sendCommand(target, "Runtime.evaluate", {
+    expression, returnByValue: true, awaitPromise: true
+  });
+  if (response?.exceptionDetails || response?.result?.value === undefined) {
+    throw new Error("ページのスクロール位置を取得できませんでした。");
+  }
+  return response.result.value;
+}
+
 async function capturePageTiles(api, target, contentClip, viewport) {
   const tiles = [];
-  for (const tile of tileClips(contentClip, viewport)) {
-    const result = await api.debugger.sendCommand(target, "Page.captureScreenshot", {
-      format: "png",
-      fromSurface: true,
-      captureBeyondViewport: true,
-      clip: tile.clip
-    });
-    if (!result?.data) throw new Error("ページの分割画像を取得できませんでした。");
-    tiles.push({ ...tile, dataUrl: `data:image/png;base64,${result.data}` });
+  const original = await evaluatePage(api, target, "({ x: window.scrollX, y: window.scrollY })");
+  try {
+    for (const tile of overlappingTileClips(contentClip, viewport)) {
+      const position = await evaluatePage(api, target, `new Promise(resolve => {
+        window.scrollTo({ left: ${tile.clip.x}, top: ${tile.captureY}, behavior: 'instant' });
+        setTimeout(() => resolve({ x: window.scrollX, y: window.scrollY }), 400);
+      })`);
+      if (![position.x, position.y].every(Number.isFinite) ||
+          position.x > tile.clip.x + 1 || position.y > tile.clip.y + 1 ||
+          position.x + viewport.width < tile.clip.x + tile.width - 1 ||
+          position.y + viewport.height < tile.clip.y + tile.height - 1) {
+        throw new Error("ページを必要な位置までスクロールできませんでした。ページ内の独立したスクロール枠には対応していません。");
+      }
+      let result;
+      let capturePosition = position;
+      for (let attempt = 0; attempt < 2; attempt++) {
+        result = await api.debugger.sendCommand(target, "Page.captureScreenshot", {
+          format: "png", fromSurface: true, captureBeyondViewport: false
+        });
+        const after = await evaluatePage(api, target, "({ x: window.scrollX, y: window.scrollY })");
+        if (Math.abs(after.x - capturePosition.x) <= 1 && Math.abs(after.y - capturePosition.y) <= 1) break;
+        if (attempt === 1) throw new Error("撮影中にページのスクロール位置が変わりました。再試行してください。");
+        capturePosition = await evaluatePage(api, target, `new Promise(resolve =>
+          setTimeout(() => resolve({ x: window.scrollX, y: window.scrollY }), 400))`);
+      }
+      if (!result?.data) throw new Error("ページの分割画像を取得できませんでした。");
+      if (capturePosition.x > tile.clip.x + 1 || capturePosition.y > tile.clip.y + 1 ||
+          capturePosition.x + viewport.width < tile.clip.x + tile.width - 1 ||
+          capturePosition.y + viewport.height < tile.clip.y + tile.height - 1) {
+        throw new Error("撮影中にページの表示位置が変わりました。再試行してください。");
+      }
+      tiles.push({
+        x: tile.x, y: tile.y, width: tile.width, height: tile.height,
+        sourceX: tile.clip.x - capturePosition.x, sourceY: tile.clip.y - capturePosition.y,
+        viewportWidth: viewport.width, viewportHeight: viewport.height,
+        dataUrl: `data:image/png;base64,${result.data}`
+      });
+    }
+  } finally {
+    await evaluatePage(api, target,
+      `(() => { window.scrollTo({ left: ${original.x}, top: ${original.y}, behavior: 'instant' }); return true; })()`);
   }
   return tiles;
 }
@@ -80,15 +147,10 @@ export async function captureFullPage(api, tabId, imageProcessor = null) {
     const dataUrl = `data:image/png;base64,${result.data}`;
 
     if (imageProcessor && viewport && contentClip.height >= viewport.height * 1.8) {
-      let repeated = false;
-      try {
-        repeated = await imageProcessor.hasRepeatedViewport(dataUrl, {
-          contentHeight: contentClip.height,
-          viewportHeight: viewport.height
-        });
-      } catch {
-        // Analysis is an enhancement; a valid normal capture must remain usable.
-      }
+      const repeated = await imageProcessor.hasRepeatedViewport(dataUrl, {
+        contentHeight: contentClip.height,
+        viewportHeight: viewport.height
+      });
       if (repeated) {
         await imageProcessor.onFallback?.();
         const tiles = await capturePageTiles(api, target, contentClip, viewport);

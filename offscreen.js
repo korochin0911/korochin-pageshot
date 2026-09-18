@@ -1,4 +1,4 @@
-import { bandsAreRepeated } from "./image-analysis.js";
+import { bandsAreRepeated, repetitionBands } from "./image-analysis.js";
 
 async function loadImage(dataUrl) {
   const response = await fetch(dataUrl);
@@ -10,21 +10,24 @@ async function loadImage(dataUrl) {
 async function detectRepetition(dataUrl, dimensions) {
   const image = await loadImage(dataUrl);
   try {
-    const bandHeight = Math.round(dimensions.viewportHeight * image.height / dimensions.contentHeight);
-    if (bandHeight <= 0 || image.height < bandHeight * 1.8) return false;
-
     const sampleWidth = 96;
     const sampleHeight = 64;
     const canvas = document.createElement("canvas");
     canvas.width = sampleWidth;
     canvas.height = sampleHeight;
     const context = canvas.getContext("2d", { willReadFrequently: true });
-    context.drawImage(image, 0, 0, image.width, bandHeight, 0, 0, sampleWidth, sampleHeight);
-    const first = context.getImageData(0, 0, sampleWidth, sampleHeight).data;
-    context.clearRect(0, 0, sampleWidth, sampleHeight);
-    context.drawImage(image, 0, bandHeight, image.width, bandHeight, 0, 0, sampleWidth, sampleHeight);
-    const second = context.getImageData(0, 0, sampleWidth, sampleHeight).data;
-    return bandsAreRepeated(first, second);
+    for (let delta = -3; delta <= 3; delta++) {
+      const bands = repetitionBands(image.height, dimensions.viewportHeight, dimensions.contentHeight, delta);
+      if (!bands) continue;
+      context.clearRect(0, 0, sampleWidth, sampleHeight);
+      context.drawImage(image, 0, 0, image.width, bands.height, 0, 0, sampleWidth, sampleHeight);
+      const first = context.getImageData(0, 0, sampleWidth, sampleHeight).data;
+      context.clearRect(0, 0, sampleWidth, sampleHeight);
+      context.drawImage(image, 0, bands.offset, image.width, bands.height, 0, 0, sampleWidth, sampleHeight);
+      const second = context.getImageData(0, 0, sampleWidth, sampleHeight).data;
+      if (bandsAreRepeated(first, second)) return true;
+    }
+    return false;
   } finally {
     image.close();
   }
@@ -42,7 +45,14 @@ async function stitchTiles(tiles, dimensions) {
   for (const tile of tiles) {
     const image = await loadImage(tile.dataUrl);
     try {
-      context.drawImage(image, tile.x, tile.y, tile.width, tile.height);
+      const scaleX = image.width / tile.viewportWidth;
+      const scaleY = image.height / tile.viewportHeight;
+      context.drawImage(
+        image,
+        tile.sourceX * scaleX, tile.sourceY * scaleY,
+        tile.width * scaleX, tile.height * scaleY,
+        tile.x, tile.y, tile.width, tile.height
+      );
     } finally {
       image.close();
     }

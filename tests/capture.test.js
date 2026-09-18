@@ -1,9 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-import { captureFullPage, clipFor, createCaptureService, filenameFor, tileClips, viewportFor } from "../capture.js";
+import { captureFullPage, clipFor, createCaptureService, filenameFor, overlappingTileClips, tileClips, viewportFor } from "../capture.js";
 import { copyDocumentTitleToClipboard, copyPngToClipboard } from "../clipboard.js";
-import { bandsAreRepeated } from "../image-analysis.js";
+import { bandsAreRepeated, repetitionBands } from "../image-analysis.js";
 
 function fixture() {
   const calls = [];
@@ -105,9 +105,22 @@ test("viewport and tile clips cover the content without gaps", () => {
   assert.equal(viewportFor({}, content), null);
 });
 
+test("fallback captures seam content inside an overlapping viewport", () => {
+  const clips = overlappingTileClips(
+    { x: 0, y: 0, width: 1520, height: 1526, scale: 1 },
+    { width: 1520, height: 791 }
+  );
+  assert.deepEqual(clips.map(({ y, height, captureY }) => ({ y, height, captureY })), [
+    { y: 0, height: 791, captureY: 0 },
+    { y: 791, height: 594, captureY: 594 },
+    { y: 1385, height: 141, captureY: 735 }
+  ]);
+});
+
 test("repeated full-page output falls back to viewport-sized tiles", async () => {
   const f = fixture();
   let captures = 0;
+  let position = { x: 0, y: 120 };
   f.api.debugger.sendCommand = async (target, method, params) => {
     f.calls.push([method, target, params]);
     if (method === "Page.getLayoutMetrics") {
@@ -115,6 +128,13 @@ test("repeated full-page output falls back to viewport-sized tiles", async () =>
         cssContentSize: { x: 0, y: 0, width: 1200, height: 1700 },
         cssVisualViewport: { clientWidth: 1200, clientHeight: 700 }
       };
+    }
+    if (method === "Runtime.evaluate") {
+      if (params.expression.includes("window.scrollTo")) {
+        const match = params.expression.match(/left: ([\d.]+), top: ([\d.]+)/);
+        position = { x: Number(match[1]), y: Math.min(Number(match[2]), 1000) };
+      }
+      return { result: { value: position } };
     }
     captures += 1;
     return { data: `CAPTURE-${captures}` };
@@ -131,8 +151,13 @@ test("repeated full-page output falls back to viewport-sized tiles", async () =>
       assert.deepEqual(dimensions, { width: 1200, height: 1700 });
       assert.deepEqual(tiles.map(({ y, height, dataUrl }) => ({ y, height, dataUrl })), [
         { y: 0, height: 700, dataUrl: "data:image/png;base64,CAPTURE-2" },
-        { y: 700, height: 700, dataUrl: "data:image/png;base64,CAPTURE-3" },
-        { y: 1400, height: 300, dataUrl: "data:image/png;base64,CAPTURE-4" }
+        { y: 700, height: 525, dataUrl: "data:image/png;base64,CAPTURE-3" },
+        { y: 1225, height: 475, dataUrl: "data:image/png;base64,CAPTURE-4" }
+      ]);
+      assert.deepEqual(tiles.map(({ sourceY, viewportHeight }) => ({ sourceY, viewportHeight })), [
+        { sourceY: 0, viewportHeight: 700 },
+        { sourceY: 175, viewportHeight: 700 },
+        { sourceY: 225, viewportHeight: 700 }
       ]);
       return "data:image/png;base64,STITCHED";
     }
@@ -140,10 +165,59 @@ test("repeated full-page output falls back to viewport-sized tiles", async () =>
   assert.equal(await captureFullPage(f.api, 42, processor), "data:image/png;base64,STITCHED");
   assert.equal(fallbackNotified, true);
   assert.equal(f.calls.filter(([name]) => name === "Page.captureScreenshot").length, 4);
+  assert.ok(f.calls.filter(([name, , params]) => name === "Page.captureScreenshot" && params.captureBeyondViewport === false).length === 3);
+  assert.deepEqual(position, { x: 0, y: 120 });
   assert.equal(f.calls.filter(([name]) => name === "detach").length, 1);
 });
 
-test("image analysis failure keeps the valid one-shot capture", async () => {
+test("fallback reports an unscrollable page instead of stitching repeated captures", async () => {
+  const f = fixture();
+  f.api.debugger.sendCommand = async (target, method, params) => {
+    f.calls.push([method, target, params]);
+    if (method === "Page.getLayoutMetrics") return {
+      cssContentSize: { x: 0, y: 0, width: 800, height: 1800 },
+      cssVisualViewport: { clientWidth: 800, clientHeight: 600 }
+    };
+    if (method === "Runtime.evaluate") return { result: { value: { x: 0, y: 0 } } };
+    return { data: "CAPTURE" };
+  };
+  const processor = { hasRepeatedViewport: async () => true, stitch: async () => assert.fail("must not stitch") };
+  await assert.rejects(captureFullPage(f.api, 42, processor), /スクロールできませんでした/);
+  assert.equal(f.calls.filter(([name]) => name === "detach").length, 1);
+});
+
+test("fallback recaptures a tile when scroll anchoring moves the page during capture", async () => {
+  const f = fixture();
+  let position = { x: 0, y: 0 };
+  let captures = 0;
+  f.api.debugger.sendCommand = async (target, method, params) => {
+    f.calls.push([method, target, params]);
+    if (method === "Page.getLayoutMetrics") return {
+      cssContentSize: { x: 0, y: 0, width: 800, height: 1700 },
+      cssVisualViewport: { clientWidth: 800, clientHeight: 700 }
+    };
+    if (method === "Runtime.evaluate") {
+      const match = params.expression.match(/left: ([\d.]+), top: ([\d.]+)/);
+      if (match) position = { x: Number(match[1]), y: Math.min(Number(match[2]), 1000) };
+      return { result: { value: position } };
+    }
+    captures++;
+    if (captures === 3) position = { x: 0, y: position.y + 10 };
+    return { data: `CAPTURE-${captures}` };
+  };
+  const processor = {
+    hasRepeatedViewport: async () => true,
+    stitch: async (tiles) => {
+      assert.equal(tiles[1].dataUrl, "data:image/png;base64,CAPTURE-4");
+      assert.equal(tiles[1].sourceY, 165);
+      return "data:image/png;base64,STITCHED";
+    }
+  };
+  assert.equal(await captureFullPage(f.api, 42, processor), "data:image/png;base64,STITCHED");
+  assert.equal(captures, 5);
+});
+
+test("image analysis failure is reported instead of accepting a potentially repeated capture", async () => {
   const f = fixture();
   f.api.debugger.sendCommand = async (target, method, params) => {
     f.calls.push([method, target, params]);
@@ -158,8 +232,16 @@ test("image analysis failure keeps the valid one-shot capture", async () => {
     hasRepeatedViewport: async () => { throw new Error("analysis unavailable"); },
     stitch: async () => assert.fail("must not stitch")
   };
-  assert.equal(await captureFullPage(f.api, 42, processor), "data:image/png;base64,FULL");
+  await assert.rejects(captureFullPage(f.api, 42, processor), /analysis unavailable/);
   assert.equal(f.calls.filter(([name]) => name === "Page.captureScreenshot").length, 1);
+  assert.equal(f.calls.filter(([name]) => name === "detach").length, 1);
+});
+
+test("repetition sampling uses only the available part of a final partial viewport", () => {
+  assert.deepEqual(repetitionBands(1908, 989, 1908), { offset: 989, height: 919 });
+  assert.deepEqual(repetitionBands(1908, 987, 1908, 2), { offset: 989, height: 919 });
+  assert.deepEqual(repetitionBands(3500, 900, 3500), { offset: 900, height: 900 });
+  assert.equal(repetitionBands(1500, 900, 1500), null);
 });
 
 test("image repetition detection tolerates tiny pixel noise but rejects different bands", () => {

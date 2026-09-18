@@ -1,3 +1,9 @@
+export function repetitionBands(imageHeight, viewportHeight, contentHeight, offsetDelta = 0) {
+  const offset = Math.round(viewportHeight * imageHeight / contentHeight) + offsetDelta;
+  if (!Number.isFinite(offset) || offset <= 0 || imageHeight < offset * 1.8) return null;
+  return { offset, height: Math.min(offset, imageHeight - offset) };
+}
+
 export function bandsAreRepeated(first, second) {
   if (!(first instanceof Uint8ClampedArray) || first.length !== second?.length || first.length === 0) {
     return false;
