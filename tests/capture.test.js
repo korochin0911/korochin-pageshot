@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { captureFullPage, clipFor, createCaptureService, filenameFor, overlappingTileClips, tileClips, viewportFor } from "../capture.js";
 import { copyDocumentTitleToClipboard, copyPngToClipboard } from "../clipboard.js";
-import { bandsAreRepeated, repetitionBands } from "../image-analysis.js";
+import { bandsAreRepeated, repetitionBands, repetitionOffsets } from "../image-analysis.js";
 
 function fixture() {
   const calls = [];
@@ -103,6 +103,10 @@ test("viewport and tile clips cover the content without gaps", () => {
     { x: 800, y: 1400, width: 400, height: 300, clip: { x: 795, y: 1410, width: 400, height: 300, scale: 1 } }
   ]);
   assert.equal(viewportFor({}, content), null);
+  assert.deepEqual(viewportFor({
+    cssVisualViewport: { clientWidth: 0, clientHeight: NaN },
+    cssLayoutViewport: { clientWidth: 900, clientHeight: 800 }
+  }, content), { width: 900, height: 800 });
 });
 
 test("fallback captures seam content inside an overlapping viewport", () => {
@@ -143,8 +147,9 @@ test("repeated full-page output falls back to viewport-sized tiles", async () =>
   let fallbackNotified = false;
   const processor = {
     hasRepeatedViewport: async (dataUrl, dimensions) => {
-      assert.equal(dataUrl, "data:image/png;base64,CAPTURE-1");
       assert.deepEqual(dimensions, { contentHeight: 1700, viewportHeight: 700 });
+      if (dataUrl === "data:image/png;base64,STITCHED") return false;
+      assert.equal(dataUrl, "data:image/png;base64,CAPTURE-1");
       return true;
     },
     onFallback: async () => { fallbackNotified = true; },
@@ -208,7 +213,7 @@ test("fallback recaptures a tile when scroll anchoring moves the page during cap
     return { data: `CAPTURE-${captures}` };
   };
   const processor = {
-    hasRepeatedViewport: async () => true,
+    hasRepeatedViewport: async (dataUrl) => !dataUrl.endsWith("STITCHED"),
     stitch: async (tiles) => {
       assert.equal(tiles[1].dataUrl, "data:image/png;base64,CAPTURE-4");
       assert.equal(tiles[1].sourceY, 165);
@@ -217,6 +222,29 @@ test("fallback recaptures a tile when scroll anchoring moves the page during cap
   };
   assert.equal(await captureFullPage(f.api, 42, processor), "data:image/png;base64,STITCHED");
   assert.equal(captures, 5);
+});
+
+test("fallback refuses to save a stitched image with repeated viewports", async () => {
+  const f = fixture();
+  let position = { x: 0, y: 0 };
+  f.api.debugger.sendCommand = async (target, method, params) => {
+    if (method === "Page.getLayoutMetrics") return {
+      cssContentSize: { x: 0, y: 0, width: 800, height: 1700 },
+      cssVisualViewport: { clientWidth: 800, clientHeight: 700 }
+    };
+    if (method === "Emulation.setDeviceMetricsOverride") throw new Error("unavailable");
+    if (method === "Runtime.evaluate") {
+      const match = params.expression.match(/left: ([\d.]+), top: ([\d.]+)/);
+      if (match) position = { x: Number(match[1]), y: Math.min(Number(match[2]), 1000) };
+      return { result: { value: position } };
+    }
+    return { data: "CAPTURE" };
+  };
+  await assert.rejects(captureFullPage(f.api, 42, {
+    hasRepeatedViewport: async () => true,
+    stitch: async () => "data:image/png;base64,STITCHED"
+  }), /分割撮影でも同じ表示が繰り返されました/);
+  assert.equal(f.calls.filter(([name]) => name === "detach").length, 1);
 });
 
 test("expanded viewport captures a short page without a seam even when repetition is absent", async () => {
@@ -256,6 +284,39 @@ test("expanded viewport captures a short page without a seam even when repetitio
   });
 });
 
+test("repeated long page tries an expanded viewport before scrolling tiles", async () => {
+  const f = fixture();
+  let expanded = false;
+  const pngHeader = Buffer.alloc(24);
+  Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]).copy(pngHeader);
+  pngHeader.writeUInt32BE(800, 16);
+  pngHeader.writeUInt32BE(4700, 20);
+  const completePng = pngHeader.toString("base64");
+  let captures = 0;
+  f.api.debugger.sendCommand = async (target, method, params) => {
+    f.calls.push([method, target, params]);
+    if (method === "Emulation.setDeviceMetricsOverride") { expanded = true; return {}; }
+    if (method === "Emulation.clearDeviceMetricsOverride") { expanded = false; return {}; }
+    if (method === "Runtime.evaluate") {
+      return { result: { value: params.expression.includes("setTimeout") ? true : { x: 0, y: 0 } } };
+    }
+    if (method === "Page.getLayoutMetrics") return {
+      cssContentSize: { x: 0, y: 0, width: 800, height: 4700 },
+      cssVisualViewport: { clientWidth: 800, clientHeight: expanded ? 4700 : 800 }
+    };
+    captures++;
+    return { data: captures === 1 ? "REPEATED" : completePng };
+  };
+  const processor = {
+    hasRepeatedViewport: async (dataUrl) => dataUrl.endsWith("REPEATED"),
+    stitch: async () => assert.fail("expanded capture should not stitch")
+  };
+  assert.equal(await captureFullPage(f.api, 42, processor), `data:image/png;base64,${completePng}`);
+  assert.equal(captures, 2);
+  assert.equal(expanded, false);
+  assert.equal(f.calls.filter(([name]) => name === "Emulation.setDeviceMetricsOverride").length, 1);
+});
+
 test("image analysis failure is reported instead of accepting a potentially repeated capture", async () => {
   const f = fixture();
   f.api.debugger.sendCommand = async (target, method, params) => {
@@ -281,6 +342,14 @@ test("repetition sampling uses only the available part of a final partial viewpo
   assert.deepEqual(repetitionBands(1908, 987, 1908, 2), { offset: 989, height: 919 });
   assert.deepEqual(repetitionBands(3500, 900, 3500), { offset: 900, height: 900 });
   assert.equal(repetitionBands(1500, 900, 1500), null);
+});
+
+test("repetition search covers a painted viewport that differs from reported metrics", () => {
+  const offsets = repetitionOffsets(7350, 860, 7350);
+  assert.equal(offsets[0], 860);
+  assert.ok(offsets.includes(919));
+  assert.equal(new Set(offsets).size, offsets.length);
+  assert.deepEqual(repetitionOffsets(1500, 0, 1500), []);
 });
 
 test("image repetition detection tolerates tiny pixel noise but rejects different bands", () => {

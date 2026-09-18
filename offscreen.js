@@ -1,4 +1,4 @@
-import { bandsAreRepeated, repetitionBands } from "./image-analysis.js";
+import { bandsAreRepeated, repetitionBands, repetitionOffsets } from "./image-analysis.js";
 
 async function loadImage(dataUrl) {
   const response = await fetch(dataUrl);
@@ -16,8 +16,18 @@ async function detectRepetition(dataUrl, dimensions) {
     canvas.width = sampleWidth;
     canvas.height = sampleHeight;
     const context = canvas.getContext("2d", { willReadFrequently: true });
-    for (let delta = -3; delta <= 3; delta++) {
-      const bands = repetitionBands(image.height, dimensions.viewportHeight, dimensions.contentHeight, delta);
+    // Chromium can paint a screenshot in viewport-sized repeats even when the
+    // reported visual viewport differs from the painted viewport height.
+    const probeHeight = Math.min(512, Math.floor(image.height / 3));
+    context.drawImage(image, 0, 0, image.width, probeHeight, 0, 0, sampleWidth, sampleHeight);
+    const firstProbe = context.getImageData(0, 0, sampleWidth, sampleHeight).data;
+    for (const offset of repetitionOffsets(image.height, dimensions.viewportHeight, dimensions.contentHeight)) {
+      context.clearRect(0, 0, sampleWidth, sampleHeight);
+      context.drawImage(image, 0, offset, image.width, probeHeight, 0, 0, sampleWidth, sampleHeight);
+      const secondProbe = context.getImageData(0, 0, sampleWidth, sampleHeight).data;
+      if (!bandsAreRepeated(firstProbe, secondProbe)) continue;
+      const bands = repetitionBands(image.height, dimensions.viewportHeight, dimensions.contentHeight,
+        offset - Math.round(dimensions.viewportHeight * image.height / dimensions.contentHeight));
       if (!bands) continue;
       context.clearRect(0, 0, sampleWidth, sampleHeight);
       context.drawImage(image, 0, 0, image.width, bands.height, 0, 0, sampleWidth, sampleHeight);

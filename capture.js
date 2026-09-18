@@ -19,8 +19,10 @@ export function clipFor(metrics) {
 
 export function viewportFor(metrics, contentClip) {
   const viewport = metrics.cssVisualViewport;
-  const width = Math.floor(viewport?.clientWidth);
-  const height = Math.floor(viewport?.clientHeight);
+  const layoutViewport = metrics.cssLayoutViewport;
+  const validSize = (visual, layout) => [visual, layout].find((value) => Number.isFinite(value) && value > 0);
+  const width = Math.floor(validSize(viewport?.clientWidth, layoutViewport?.clientWidth));
+  const height = Math.floor(validSize(viewport?.clientHeight, layoutViewport?.clientHeight));
   if (![width, height].every(Number.isFinite) || width <= 0 || height <= 0) return null;
   return {
     width: Math.min(width, contentClip.width),
@@ -197,7 +199,13 @@ export async function captureFullPage(api, tabId, imageProcessor = null) {
   try {
     const metrics = await api.debugger.sendCommand(target, "Page.getLayoutMetrics");
     const contentClip = clipFor(metrics);
-    const viewport = viewportFor(metrics, contentClip);
+    let viewport = viewportFor(metrics, contentClip);
+    if (!viewport && imageProcessor) {
+      const size = await evaluatePage(api, target,
+        "({ clientWidth: window.innerWidth, clientHeight: window.innerHeight })");
+      viewport = viewportFor({ cssVisualViewport: size }, contentClip);
+      if (!viewport) throw new Error("表示領域のサイズを取得できませんでした。");
+    }
     const result = await api.debugger.sendCommand(target, "Page.captureScreenshot", {
       format: "png",
       fromSurface: true,
@@ -212,22 +220,28 @@ export async function captureFullPage(api, tabId, imageProcessor = null) {
         contentHeight: contentClip.height,
         viewportHeight: viewport.height
       });
-      if (contentClip.height <= viewport.height * 3) {
-        if (repeated) await imageProcessor.onFallback?.();
+      if (repeated) await imageProcessor.onFallback?.();
+      if (repeated || contentClip.height <= viewport.height * 3) {
         const expanded = await captureExpandedViewport(api, target, contentClip, viewport, imageProcessor);
         if (expanded) return expanded;
       }
       if (repeated) {
-        if (contentClip.height > viewport.height * 3) await imageProcessor.onFallback?.();
         const refreshedMetrics = await api.debugger.sendCommand(target, "Page.getLayoutMetrics");
         const refreshedClip = clipFor(refreshedMetrics);
-        const refreshedViewport = viewportFor(refreshedMetrics, refreshedClip);
+        const refreshedViewport = viewportFor(refreshedMetrics, refreshedClip) ?? viewport;
         if (!refreshedViewport) throw new Error("表示領域のサイズを取得できませんでした。");
         const tiles = await capturePageTiles(api, target, refreshedClip, refreshedViewport);
-        return await imageProcessor.stitch(tiles, {
+        const stitched = await imageProcessor.stitch(tiles, {
           width: refreshedClip.width,
           height: refreshedClip.height
         });
+        if (await imageProcessor.hasRepeatedViewport(stitched, {
+          contentHeight: refreshedClip.height,
+          viewportHeight: refreshedViewport.height
+        })) {
+          throw new Error("分割撮影でも同じ表示が繰り返されました。ページを再読み込みしてから再試行してください。");
+        }
+        return stitched;
       }
     }
     return dataUrl;

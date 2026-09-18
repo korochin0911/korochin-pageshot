@@ -4,6 +4,19 @@ export function repetitionBands(imageHeight, viewportHeight, contentHeight, offs
   return { offset, height: Math.min(offset, imageHeight - offset) };
 }
 
+export function repetitionOffsets(imageHeight, viewportHeight, contentHeight) {
+  const estimated = Math.round(viewportHeight * imageHeight / contentHeight);
+  if (!Number.isFinite(estimated) || estimated <= 0) return [];
+  const radius = Math.max(12, Math.ceil(estimated * 0.15));
+  const offsets = [];
+  for (let distance = 0; distance <= radius; distance++) {
+    for (const offset of distance === 0 ? [estimated] : [estimated - distance, estimated + distance]) {
+      if (offset > 0 && imageHeight >= offset * 1.8) offsets.push(offset);
+    }
+  }
+  return offsets;
+}
+
 export function bandsAreRepeated(first, second) {
   if (!(first instanceof Uint8ClampedArray) || first.length !== second?.length || first.length === 0) {
     return false;
