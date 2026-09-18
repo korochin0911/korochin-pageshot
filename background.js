@@ -34,7 +34,7 @@ const imageProcessor = {
   onFallback: () => publishStatus({
     state: "capturing",
     mode: "fullpage",
-    message: "ページ構成に合わせて分割撮影しています…"
+    message: "ページ構成に合わせて再撮影しています…"
   })
 };
 

@@ -123,6 +123,7 @@ test("repeated full-page output falls back to viewport-sized tiles", async () =>
   let position = { x: 0, y: 120 };
   f.api.debugger.sendCommand = async (target, method, params) => {
     f.calls.push([method, target, params]);
+    if (method === "Emulation.setDeviceMetricsOverride") throw new Error("unavailable");
     if (method === "Page.getLayoutMetrics") {
       return {
         cssContentSize: { x: 0, y: 0, width: 1200, height: 1700 },
@@ -192,6 +193,7 @@ test("fallback recaptures a tile when scroll anchoring moves the page during cap
   let captures = 0;
   f.api.debugger.sendCommand = async (target, method, params) => {
     f.calls.push([method, target, params]);
+    if (method === "Emulation.setDeviceMetricsOverride") throw new Error("unavailable");
     if (method === "Page.getLayoutMetrics") return {
       cssContentSize: { x: 0, y: 0, width: 800, height: 1700 },
       cssVisualViewport: { clientWidth: 800, clientHeight: 700 }
@@ -215,6 +217,43 @@ test("fallback recaptures a tile when scroll anchoring moves the page during cap
   };
   assert.equal(await captureFullPage(f.api, 42, processor), "data:image/png;base64,STITCHED");
   assert.equal(captures, 5);
+});
+
+test("expanded viewport captures a short page without a seam even when repetition is absent", async () => {
+  const f = fixture();
+  let expanded = false;
+  let captures = 0;
+  const pngHeader = Buffer.alloc(24);
+  Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]).copy(pngHeader);
+  pngHeader.writeUInt32BE(800, 16);
+  pngHeader.writeUInt32BE(1500, 20);
+  const completePng = pngHeader.toString("base64");
+  f.api.debugger.sendCommand = async (target, method, params) => {
+    f.calls.push([method, target, params]);
+    if (method === "Emulation.setDeviceMetricsOverride") { expanded = true; return {}; }
+    if (method === "Emulation.clearDeviceMetricsOverride") { expanded = false; return {}; }
+    if (method === "Runtime.evaluate") return { result: { value: params.expression.includes("setTimeout") ? true : { x: 0, y: 100 } } };
+    if (method === "Page.getLayoutMetrics") return {
+      cssContentSize: { x: 0, y: 0, width: 800, height: 1500 },
+      cssVisualViewport: { clientWidth: 800, clientHeight: expanded ? 1500 : 800 }
+    };
+    captures++;
+    return { data: captures === 1 ? "REPEATED" : completePng };
+  };
+  let analyses = 0;
+  const processor = {
+    hasRepeatedViewport: async () => { analyses++; return false; },
+    stitch: async () => assert.fail("expanded capture should not stitch")
+  };
+  assert.equal(await captureFullPage(f.api, 42, processor), `data:image/png;base64,${completePng}`);
+  assert.equal(captures, 2);
+  assert.equal(analyses, 2);
+  assert.equal(expanded, false);
+  assert.equal(f.calls.filter(([name]) => name === "Emulation.clearDeviceMetricsOverride").length, 1);
+  assert.deepEqual(f.calls.filter(([name]) => name === "Page.captureScreenshot")[1][2], {
+    format: "png", fromSurface: true, captureBeyondViewport: false,
+    clip: { x: 0, y: 0, width: 800, height: 1500, scale: 1 }
+  });
 });
 
 test("image analysis failure is reported instead of accepting a potentially repeated capture", async () => {

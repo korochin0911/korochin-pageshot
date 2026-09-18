@@ -81,6 +81,14 @@ async function evaluatePage(api, target, expression) {
   return response.result.value;
 }
 
+function pngDimensions(base64) {
+  const header = atob(base64.slice(0, 32));
+  if (header.length < 24 || header.slice(0, 8) !== "\x89PNG\r\n\x1a\n") return null;
+  const numberAt = (index) => (((header.charCodeAt(index) * 256 + header.charCodeAt(index + 1)) * 256 +
+    header.charCodeAt(index + 2)) * 256 + header.charCodeAt(index + 3));
+  return { width: numberAt(16), height: numberAt(20) };
+}
+
 async function capturePageTiles(api, target, contentClip, viewport) {
   const tiles = [];
   const original = await evaluatePage(api, target, "({ x: window.scrollX, y: window.scrollY })");
@@ -128,6 +136,59 @@ async function capturePageTiles(api, target, contentClip, viewport) {
   return tiles;
 }
 
+async function captureExpandedViewport(api, target, contentClip, viewport, imageProcessor) {
+  // A real viewport tall enough to contain the document avoids seams and sticky
+  // overlays on pages that Chromium cannot render correctly beyond the viewport.
+  if (contentClip.x !== 0 || contentClip.y !== 0 ||
+      contentClip.width > viewport.width + 1 || contentClip.height > 8000 ||
+      contentClip.width * contentClip.height > 20_000_000) return null;
+
+  let original;
+  let overridden = false;
+  try {
+    original = await evaluatePage(api, target, "({ x: window.scrollX, y: window.scrollY })");
+    await api.debugger.sendCommand(target, "Emulation.setDeviceMetricsOverride", {
+      width: contentClip.width, height: contentClip.height,
+      deviceScaleFactor: 1, mobile: false
+    });
+    overridden = true;
+    await evaluatePage(api, target, "new Promise(resolve => setTimeout(() => resolve(true), 500))");
+    const metrics = await api.debugger.sendCommand(target, "Page.getLayoutMetrics");
+    const expandedClip = clipFor(metrics);
+    if (expandedClip.x !== 0 || expandedClip.y !== 0 ||
+        Math.abs(expandedClip.width - contentClip.width) > 16 ||
+        Math.abs(expandedClip.height - contentClip.height) > contentClip.height * 0.1 ||
+        expandedClip.height > 8000 ||
+        expandedClip.width * expandedClip.height > 20_000_000 ||
+        !Number.isFinite(metrics.cssVisualViewport?.clientHeight) ||
+        metrics.cssVisualViewport.clientHeight < expandedClip.height - 1) return null;
+
+    const result = await api.debugger.sendCommand(target, "Page.captureScreenshot", {
+      format: "png", fromSurface: true, captureBeyondViewport: false,
+      clip: expandedClip
+    });
+    if (!result?.data) return null;
+    const dimensions = pngDimensions(result.data);
+    if (!dimensions || dimensions.width < expandedClip.width ||
+        Math.abs(dimensions.width / expandedClip.width -
+          dimensions.height / expandedClip.height) > 0.02) return null;
+    const dataUrl = `data:image/png;base64,${result.data}`;
+    const repeated = await imageProcessor.hasRepeatedViewport(dataUrl, {
+      contentHeight: expandedClip.height,
+      viewportHeight: viewport.height
+    });
+    return repeated ? null : dataUrl;
+  } catch {
+    return null;
+  } finally {
+    if (overridden) {
+      await api.debugger.sendCommand(target, "Emulation.clearDeviceMetricsOverride");
+      await evaluatePage(api, target,
+        `(() => { window.scrollTo({ left: ${original.x}, top: ${original.y}, behavior: 'instant' }); return true; })()`);
+    }
+  }
+}
+
 export async function captureFullPage(api, tabId, imageProcessor = null) {
   const target = { tabId };
   // Attach failures must not detach an existing session owned by DevTools/another extension.
@@ -151,12 +212,21 @@ export async function captureFullPage(api, tabId, imageProcessor = null) {
         contentHeight: contentClip.height,
         viewportHeight: viewport.height
       });
+      if (contentClip.height <= viewport.height * 3) {
+        if (repeated) await imageProcessor.onFallback?.();
+        const expanded = await captureExpandedViewport(api, target, contentClip, viewport, imageProcessor);
+        if (expanded) return expanded;
+      }
       if (repeated) {
-        await imageProcessor.onFallback?.();
-        const tiles = await capturePageTiles(api, target, contentClip, viewport);
+        if (contentClip.height > viewport.height * 3) await imageProcessor.onFallback?.();
+        const refreshedMetrics = await api.debugger.sendCommand(target, "Page.getLayoutMetrics");
+        const refreshedClip = clipFor(refreshedMetrics);
+        const refreshedViewport = viewportFor(refreshedMetrics, refreshedClip);
+        if (!refreshedViewport) throw new Error("表示領域のサイズを取得できませんでした。");
+        const tiles = await capturePageTiles(api, target, refreshedClip, refreshedViewport);
         return await imageProcessor.stitch(tiles, {
-          width: contentClip.width,
-          height: contentClip.height
+          width: refreshedClip.width,
+          height: refreshedClip.height
         });
       }
     }
