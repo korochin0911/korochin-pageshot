@@ -13,6 +13,7 @@ function fixture() {
   const api = {
     tabs: {
       query: async (query) => { calls.push(["query", query]); return [tab]; },
+      getZoom: async (tabId) => { calls.push(["getZoom", tabId]); return 1; },
       captureVisibleTab: async (...args) => { calls.push(["visible", ...args]); return "data:image/png;base64,VIEW"; }
     },
     debugger: {
@@ -107,6 +108,66 @@ test("viewport and tile clips cover the content without gaps", () => {
     cssVisualViewport: { clientWidth: 0, clientHeight: NaN },
     cssLayoutViewport: { clientWidth: 900, clientHeight: 800 }
   }, content), { width: 900, height: 800 });
+  assert.deepEqual(viewportFor({
+    cssVisualViewport: { clientWidth: 1400, clientHeight: 1900 }
+  }, content), { width: 1400, height: 1900 });
+});
+
+test("75% zoom stitches visible surfaces using the full CSS viewport dimensions", async () => {
+  const f = fixture();
+  f.api.tabs.getZoom = async (tabId) => {
+    assert.equal(tabId, 42);
+    return 0.75;
+  };
+  const content = { x: 0, y: 0, width: 2521, height: 4314 };
+  const viewport = { clientWidth: 2546, clientHeight: 1380 };
+  let position = { x: 0, y: 400 };
+  let captures = 0;
+  f.api.debugger.sendCommand = async (target, method, params) => {
+    f.calls.push([method, target, params]);
+    if (method === "Page.getLayoutMetrics") return {
+      cssContentSize: content,
+      cssVisualViewport: viewport
+    };
+    if (method === "Runtime.evaluate") {
+      const match = params.expression.match(/left: ([\d.]+), top: ([\d.]+)/);
+      if (match) position = {
+        x: Number(match[1]),
+        y: Math.min(Number(match[2]), content.height - viewport.clientHeight)
+      };
+      return { result: { value: position } };
+    }
+    assert.equal(method, "Page.captureScreenshot");
+    assert.deepEqual(params, {
+      format: "png", fromSurface: true, captureBeyondViewport: false
+    });
+    return { data: `TILE-${++captures}` };
+  };
+  let analyses = 0;
+  let fallbackNotified = false;
+  const processor = {
+    onFallback: async () => { fallbackNotified = true; },
+    stitch: async (tiles, dimensions) => {
+      assert.deepEqual(dimensions, { width: 2521, height: 4314 });
+      assert.deepEqual(tiles.map(({ y, height }) => ({ y, height })), [
+        { y: 0, height: 1380 },
+        { y: 1380, height: 1180 },
+        { y: 2560, height: 1180 },
+        { y: 3740, height: 574 }
+      ]);
+      assert.ok(tiles.every((tile) => tile.width === 2521 && tile.viewportWidth === 2546 &&
+        tile.viewportHeight === 1380 && tile.sourceX === 0));
+      return "data:image/png;base64,STITCHED";
+    },
+    hasRepeatedViewport: async () => { analyses++; return false; }
+  };
+  assert.equal(await captureFullPage(f.api, 42, processor), "data:image/png;base64,STITCHED");
+  assert.equal(captures, 4);
+  assert.equal(analyses, 1);
+  assert.equal(fallbackNotified, true);
+  assert.deepEqual(position, { x: 0, y: 400 });
+  assert.ok(!f.calls.some(([method]) => method === "Emulation.setDeviceMetricsOverride"));
+  assert.equal(f.calls.filter(([method]) => method === "detach").length, 1);
 });
 
 test("fallback captures seam content inside an overlapping viewport", () => {

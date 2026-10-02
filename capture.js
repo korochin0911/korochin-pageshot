@@ -24,10 +24,9 @@ export function viewportFor(metrics, contentClip) {
   const width = Math.floor(validSize(viewport?.clientWidth, layoutViewport?.clientWidth));
   const height = Math.floor(validSize(viewport?.clientHeight, layoutViewport?.clientHeight));
   if (![width, height].every(Number.isFinite) || width <= 0 || height <= 0) return null;
-  return {
-    width: Math.min(width, contentClip.width),
-    height: Math.min(height, contentClip.height)
-  };
+  // A viewport screenshot covers the actual CSS viewport, even when the
+  // document is narrower. Keep these dimensions for pixel-to-CSS mapping.
+  return { width, height };
 }
 
 export function tileClips(contentClip, viewport) {
@@ -191,6 +190,21 @@ async function captureExpandedViewport(api, target, contentClip, viewport, image
   }
 }
 
+async function captureAndStitchTiles(api, target, contentClip, viewport, imageProcessor) {
+  const tiles = await capturePageTiles(api, target, contentClip, viewport);
+  const stitched = await imageProcessor.stitch(tiles, {
+    width: contentClip.width,
+    height: contentClip.height
+  });
+  if (await imageProcessor.hasRepeatedViewport(stitched, {
+    contentHeight: contentClip.height,
+    viewportHeight: viewport.height
+  })) {
+    throw new Error("分割撮影でも同じ表示が繰り返されました。ページを再読み込みしてから再試行してください。");
+  }
+  return stitched;
+}
+
 export async function captureFullPage(api, tabId, imageProcessor = null) {
   const target = { tabId };
   // Attach failures must not detach an existing session owned by DevTools/another extension.
@@ -205,6 +219,16 @@ export async function captureFullPage(api, tabId, imageProcessor = null) {
         "({ clientWidth: window.innerWidth, clientHeight: window.innerHeight })");
       viewport = viewportFor({ cssVisualViewport: size }, contentClip);
       if (!viewport) throw new Error("表示領域のサイズを取得できませんでした。");
+    }
+    // At non-default browser zoom Chromium can repeat the painted surface
+    // while fulfilling a CSS-sized captureBeyondViewport clip. Capture each
+    // visible surface instead, using the unscaled CSS viewport for stitching.
+    if (imageProcessor && viewport && typeof api.tabs?.getZoom === "function") {
+      const zoom = await api.tabs.getZoom(tabId);
+      if (Number.isFinite(zoom) && Math.abs(zoom - 1) > 0.001) {
+        await imageProcessor.onFallback?.();
+        return await captureAndStitchTiles(api, target, contentClip, viewport, imageProcessor);
+      }
     }
     const result = await api.debugger.sendCommand(target, "Page.captureScreenshot", {
       format: "png",
@@ -230,18 +254,7 @@ export async function captureFullPage(api, tabId, imageProcessor = null) {
         const refreshedClip = clipFor(refreshedMetrics);
         const refreshedViewport = viewportFor(refreshedMetrics, refreshedClip) ?? viewport;
         if (!refreshedViewport) throw new Error("表示領域のサイズを取得できませんでした。");
-        const tiles = await capturePageTiles(api, target, refreshedClip, refreshedViewport);
-        const stitched = await imageProcessor.stitch(tiles, {
-          width: refreshedClip.width,
-          height: refreshedClip.height
-        });
-        if (await imageProcessor.hasRepeatedViewport(stitched, {
-          contentHeight: refreshedClip.height,
-          viewportHeight: refreshedViewport.height
-        })) {
-          throw new Error("分割撮影でも同じ表示が繰り返されました。ページを再読み込みしてから再試行してください。");
-        }
-        return stitched;
+        return await captureAndStitchTiles(api, target, refreshedClip, refreshedViewport, imageProcessor);
       }
     }
     return dataUrl;
