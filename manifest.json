@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Korochin PageShot",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "表示領域・ページ全体のPNG撮影、コマ送り画像のZIP保存とページタイトルのコピー。",
   "minimum_chrome_version": "118",
   "permissions": [

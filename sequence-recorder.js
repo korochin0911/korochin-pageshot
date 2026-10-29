@@ -46,7 +46,7 @@ async function contactSheets(frames) {
         context.fillText(`#${String(start + index + 1).padStart(4, "0")}   ${(frame.elapsedMs / 1000).toFixed(3)} s`, x + 10, y + pictureHeight + 19);
       } finally { image.close(); }
     }
-    sheets.push({ name: `sheets/sheet-${String(sheets.length + 1).padStart(3, "0")}.png`, blob: await encode(canvas, "png") });
+    sheets.push({ name: `sheets/sheet-${String(sheets.length + 1).padStart(3, "0")}.webp`, blob: await encode(canvas, "webp") });
   }
   return sheets;
 }

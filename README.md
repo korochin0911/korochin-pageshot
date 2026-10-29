@@ -50,7 +50,7 @@ screenshots/
 ZIPの中身：
 
 - frames/：連番画像。ファイル名にコマ番号と撮影開始からのミリ秒を含みます。
-- sheets/：左から右、上から下へ10コマずつ並べた時刻付き一覧PNG（2列×最大5行）。
+- sheets/：左から右、上から下へ10コマずつ並べた時刻付き一覧WebP（品質0.82、2列×最大5行）。連番画像にPNGを選んだ場合も、一覧はWebPで保存します。
 - manifest.json：ページタイトル・URL、撮影設定、各コマの実際の切り出し時刻、画像サイズ、終了理由。
 - README.txt：画像の読み方。
 
@@ -129,13 +129,13 @@ npm.cmd run check
 npm.cmd run package
 ```
 
-出力先は `dist/korochin-pageshot-v1.2.0.zip` です。ZIPにはバージョン付きのトップフォルダがあり、展開後にそのフォルダをChrome / Edgeの「パッケージ化されていない拡張機能を読み込む」で指定できます。`tests`、GitHub Actions、開発用ファイルは含みません。
+出力先は `dist/korochin-pageshot-v1.2.1.zip` です。ZIPにはバージョン付きのトップフォルダがあり、展開後にそのフォルダをChrome / Edgeの「パッケージ化されていない拡張機能を読み込む」で指定できます。`tests`、GitHub Actions、開発用ファイルは含みません。
 
 GitHubでは `manifest.json` と同じバージョンのタグをpushすると、テストと構文チェックを実行し、ZIPを添付したReleaseを自動作成します。
 
 ```powershell
-git tag v1.2.0
-git push origin v1.2.0
+git tag v1.2.1
+git push origin v1.2.1
 ```
 
 タグと `manifest.json` のバージョンが一致しない場合、誤ったリリースを防ぐためワークフローは失敗します。次回リリース時は、先に `manifest.json` と `package.json` のバージョンを同じ値へ更新してください。
