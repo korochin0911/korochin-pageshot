@@ -1,10 +1,19 @@
 {
   "manifest_version": 3,
   "name": "Korochin PageShot",
-  "version": "1.1.3",
-  "description": "表示領域・ページ全体のPNG撮影とページタイトルのコピーをショートカットで実行します。",
+  "version": "1.2.0",
+  "description": "表示領域・ページ全体のPNG撮影、コマ送り画像のZIP保存とページタイトルのコピー。",
   "minimum_chrome_version": "118",
-  "permissions": ["activeTab", "clipboardWrite", "debugger", "downloads", "offscreen", "scripting", "storage"],
+  "permissions": [
+    "activeTab",
+    "clipboardWrite",
+    "debugger",
+    "downloads",
+    "offscreen",
+    "scripting",
+    "storage",
+    "tabCapture"
+  ],
   "background": {
     "service_worker": "background.js",
     "type": "module"
@@ -15,23 +24,38 @@
   },
   "commands": {
     "capture-viewport": {
-      "suggested_key": {"default": "Ctrl+Shift+Y", "mac": "Command+Shift+Y"},
+      "suggested_key": {
+        "default": "Ctrl+Shift+Y",
+        "mac": "Command+Shift+Y"
+      },
       "description": "表示中の領域をPNG保存"
     },
     "capture-fullpage": {
-      "suggested_key": {"default": "Ctrl+Shift+U", "mac": "Command+Shift+U"},
+      "suggested_key": {
+        "default": "Ctrl+Shift+U",
+        "mac": "Command+Shift+U"
+      },
       "description": "ページ全体をPNG保存"
     },
     "copy-viewport": {
-      "suggested_key": {"default": "Alt+Shift+Y", "mac": "Alt+Shift+Y"},
+      "suggested_key": {
+        "default": "Alt+Shift+Y",
+        "mac": "Alt+Shift+Y"
+      },
       "description": "表示中の領域をクリップボードにコピー"
     },
     "copy-fullpage": {
-      "suggested_key": {"default": "Alt+Shift+U", "mac": "Alt+Shift+U"},
+      "suggested_key": {
+        "default": "Alt+Shift+U",
+        "mac": "Alt+Shift+U"
+      },
       "description": "ページ全体をクリップボードにコピー"
     },
     "copy-title": {
       "description": "ページタイトルをクリップボードにコピー"
+    },
+    "capture-sequence": {
+      "description": "表示中のタブをコマ送り画像のZIPに保存"
     }
   }
 }

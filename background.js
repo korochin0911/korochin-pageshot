@@ -1,5 +1,7 @@
 import { createCaptureService, DESTINATIONS, MODES } from "./capture.js";
 import { copyDocumentTitleToClipboard, copyPngToClipboard } from "./clipboard.js";
+import { createExclusiveRunner, DEFAULT_SEQUENCE_OPTIONS } from "./sequence.js";
+import { createSequenceService } from "./sequence-service.js";
 
 const OFFSCREEN_DOCUMENT = "offscreen.html";
 let creatingOffscreenDocument;
@@ -14,8 +16,8 @@ async function ensureOffscreenDocument() {
   if (!creatingOffscreenDocument) {
     creatingOffscreenDocument = chrome.offscreen.createDocument({
       url: OFFSCREEN_DOCUMENT,
-      reasons: ["BLOBS"],
-      justification: "異常な全体画像を検出し、分割撮影したPNGを結合するため"
+      reasons: ["BLOBS", "USER_MEDIA"],
+      justification: "撮影画像の検出・結合とタブ映像からの連番画像・ZIP生成のため"
     }).finally(() => { creatingOffscreenDocument = undefined; });
   }
   await creatingOffscreenDocument;
@@ -48,7 +50,7 @@ async function copyImageToClipboard(dataUrl, tab) {
 }
 
 async function publishStatus(status) {
-  const badge = { capturing: "…", started: "↓", copied: "✓", error: "!" }[status.state];
+  const badge = { capturing: "…", preparing: "…", countdown: "WAIT", recording: "REC", packaging: "…", cancelled: "", started: "↓", copied: "✓", error: "!" }[status.state] ?? "";
   // UI failures should not prevent capturing or leave the capture lock held.
   await Promise.allSettled([
     chrome.storage.session.set({ captureStatus: { ...status, updatedAt: Date.now() } }),
@@ -59,6 +61,14 @@ async function publishStatus(status) {
 }
 
 const capture = createCaptureService(chrome, publishStatus, () => Date.now(), copyImageToClipboard, imageProcessor);
+const exclusive = createExclusiveRunner();
+const sequence = createSequenceService(chrome, publishStatus, processImage);
+
+chrome.downloads.onChanged.addListener((delta) => {
+  if (["complete", "interrupted"].includes(delta.state?.current)) {
+    void sequence.releaseDownload(delta.id).catch(console.error);
+  }
+});
 
 async function copyPageTitle(requestedTab) {
   try {
@@ -89,19 +99,37 @@ chrome.commands.onCommand.addListener((command, tab) => {
     "copy-viewport": ["viewport", "clipboard"],
     "copy-fullpage": ["fullpage", "clipboard"]
   }[command];
-  if (action) void capture(action[0], tab, action[1]);
-  if (command === "copy-title") void copyPageTitle(tab);
+  if (action) void exclusive(() => capture(action[0], tab, action[1]));
+  if (command === "copy-title") void exclusive(() => copyPageTitle(tab));
+  if (command === "capture-sequence") {
+    void exclusive(async () => {
+      const stored = await chrome.storage.local.get("sequenceOptions");
+      return sequence.run(stored.sequenceOptions ?? DEFAULT_SEQUENCE_OPTIONS, tab);
+    }).catch(console.error);
+  }
 });
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (sender.id === chrome.runtime.id && sender.url === chrome.runtime.getURL(OFFSCREEN_DOCUMENT) && message?.target === "sequence-status") {
+    publishStatus(message.status).then(() => sendResponse({ ok: true }));
+    return true;
+  }
   if (sender.id !== chrome.runtime.id || sender.url !== chrome.runtime.getURL("popup.html")) return;
+  if (message?.type === "sequence-stop") {
+    processImage("stop-sequence", {}).then(() => sendResponse({ ok: true }), (error) => sendResponse({ ok: false, error: String(error) }));
+    return true;
+  }
+  if (message?.type === "sequence-start") {
+    exclusive(() => sequence.run(message.options)).then(sendResponse, (error) => sendResponse({ ok: false, error: String(error) }));
+    return true;
+  }
   if (message?.type === "copy-title") {
-    copyPageTitle().then(sendResponse, (error) => sendResponse({ ok: false, error: String(error) }));
+    exclusive(() => copyPageTitle()).then(sendResponse, (error) => sendResponse({ ok: false, error: String(error) }));
     return true;
   }
   if (message?.type !== "capture" || !MODES.has(message.mode) || !DESTINATIONS.has(message.destination)) return;
   // Keep the popup open until the operation finishes so errors are visible.
   // Extension popups are browser UI, outside the captured page surface.
-  capture(message.mode, undefined, message.destination).then(sendResponse, (error) => sendResponse({ ok: false, error: String(error) }));
+  exclusive(() => capture(message.mode, undefined, message.destination)).then(sendResponse, (error) => sendResponse({ ok: false, error: String(error) }));
   return true;
 });

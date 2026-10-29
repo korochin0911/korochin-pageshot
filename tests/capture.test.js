@@ -42,10 +42,10 @@ test("manifest wires save and copy commands and only declares required permissio
   const background = await readFile(new URL("../background.js", import.meta.url), "utf8");
   assert.equal(manifest.manifest_version, 3);
   assert.deepEqual(Object.keys(manifest.commands), [
-    "capture-viewport", "capture-fullpage", "copy-viewport", "copy-fullpage", "copy-title"
+    "capture-viewport", "capture-fullpage", "copy-viewport", "copy-fullpage", "copy-title", "capture-sequence"
   ]);
   assert.deepEqual(manifest.permissions.sort(), [
-    "activeTab", "clipboardWrite", "debugger", "downloads", "offscreen", "scripting", "storage"
+    "activeTab", "clipboardWrite", "debugger", "downloads", "offscreen", "scripting", "storage", "tabCapture"
   ]);
   assert.equal(manifest.host_permissions, undefined);
   assert.match(background, /scripting\.executeScript/);

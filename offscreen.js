@@ -1,4 +1,5 @@
 import { bandsAreRepeated, repetitionBands, repetitionOffsets } from "./image-analysis.js";
+import { recordSequence, releaseSequence, stopSequence } from "./sequence-recorder.js";
 
 async function loadImage(dataUrl) {
   const response = await fetch(dataUrl);
@@ -77,6 +78,20 @@ async function stitchTiles(tiles, dimensions) {
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (sender.id !== chrome.runtime.id || message?.target !== "image-processor") return;
+
+  if (["prepare-sequence", "stop-sequence", "release-sequence"].includes(message.type)) {
+    if (message.type === "stop-sequence") stopSequence();
+    if (message.type === "release-sequence") releaseSequence(message.url);
+    sendResponse({ ok: true });
+    return;
+  }
+  if (message.type === "record-sequence") {
+    recordSequence(message.streamId, message.options, message.page).then(
+      (value) => sendResponse({ ok: true, value }),
+      (error) => sendResponse({ ok: false, error: error?.message || String(error) })
+    );
+    return true;
+  }
 
   const operation = message.type === "detect-repetition"
     ? detectRepetition(message.dataUrl, message.dimensions)

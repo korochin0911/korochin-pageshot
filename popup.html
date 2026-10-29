@@ -8,7 +8,7 @@
   <script src="popup.js" type="module"></script>
 </head>
 <body>
-  <header><span class="mark" aria-hidden="true">▣</span><div><h1>PageShot</h1><p>Webページを、そのままPNGに。</p></div></header>
+  <header><span class="mark" aria-hidden="true">▣</span><div><h1>PageShot</h1><p>Webページの見た目と動きを、画像に。</p></div></header>
   <main>
     <h2>表示中の領域</h2>
     <div class="actions">
@@ -20,9 +20,19 @@
       <button class="capture" data-mode="fullpage" data-destination="download"><span class="label">PNG保存</span><kbd id="capture-fullpage-key">…</kbd></button>
       <button class="capture" data-mode="fullpage" data-destination="clipboard"><span class="label">コピー</span><kbd id="copy-fullpage-key">…</kbd></button>
     </div>
+    <h2>コマ送り画像</h2>
+    <div class="sequence-settings">
+      <label>撮影時間<select id="sequence-seconds"><option value="1">1秒</option><option value="2">2秒</option><option value="3" selected>3秒</option><option value="5">5秒</option><option value="10">10秒</option></select></label>
+      <label>コマ数 / 秒<select id="sequence-fps"><option value="2">2fps</option><option value="5">5fps</option><option value="10" selected>10fps</option></select></label>
+      <label>画像形式<select id="sequence-format"><option value="webp">WebP（軽量）</option><option value="png">PNG（可逆）</option></select></label>
+      <label>最大幅<select id="sequence-width"><option value="960">960px</option><option value="1280" selected>1280px</option><option value="1920">1920px</option></select></label>
+    </div>
+    <button id="sequence-start" class="capture"><span class="label">2秒後に連続撮影</span><kbd id="capture-sequence-key">…</kbd></button>
+    <button id="sequence-stop" hidden>途中で停止して保存</button>
+    <p class="note">連番画像＋時刻付き一覧を1つのZIPに保存します。開始後はこのメニューが閉じ、ページを操作できます。</p>
     <h2>ページ情報</h2>
     <button id="copy-title" class="capture" data-action="copy-title"><span class="label">タイトルをコピー</span><kbd id="copy-title-key">…</kbd></button>
-    <p class="destination">PNG保存先：ダウンロード / screenshots</p>
+    <p class="destination">保存先：ダウンロード / screenshots</p>
     <p id="status" role="status" aria-live="polite">撮影方法を選んでください。</p>
     <p class="note">全体撮影中はデバッグ接続の通知が表示されます。遅延読み込みの画像は、先にスクロールして読み込んでください。</p>
   </main>
