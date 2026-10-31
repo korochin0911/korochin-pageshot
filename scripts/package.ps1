@@ -38,6 +38,7 @@ $packageFiles = @(
   "clipboard.js",
   "audio-recorder.js",
   "audio-service.js",
+  "webm-duration.js",
   "sequence.js",
   "sequence-service.js",
   "sequence-recorder.js",

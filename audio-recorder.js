@@ -1,3 +1,5 @@
+import { finalizeWebmAudio } from "./webm-duration.js";
+
 export const MAX_AUDIO_DURATION_MS = 60 * 60 * 1000;
 export const MAX_AUDIO_BYTES = 128 * 1024 * 1024;
 
@@ -37,12 +39,18 @@ export function createAudioRecorder({ report, onResult }, env = globalThis) {
     session.status = { ...session.status, state: "packaging", message: "録音した音声を保存しています…" };
     try {
       await report(session.status);
-      const blob = new env.Blob(session.chunks, { type: session.recorder.mimeType });
+      let blob = new env.Blob(session.chunks, { type: session.recorder.mimeType });
       session.chunks.length = 0;
       if (!blob.size) throw new Error(session.error || "音声データを取得できませんでした。");
+      try { blob = await finalizeWebmAudio(blob); }
+      catch (error) {
+        // Keep the captured audio even if a future browser produces a layout
+        // we cannot finalize. Make the compatibility problem visible on save.
+        session.warning = `再生時間情報を補完できませんでした。アップロード先で長さを判定できない場合があります。${error.message}`;
+      }
       const url = env.URL.createObjectURL(blob);
       recordings.add(url);
-      await onResult({ url, startedAt: session.startedAt, stopReason: session.stopReason, warning: session.error });
+      await onResult({ url, startedAt: session.startedAt, stopReason: session.stopReason, warning: [session.error, session.warning].filter(Boolean).join("\n") });
     } catch (error) {
       await report({ state: "error", mode: "audio", message: `音声を保存できませんでした。\n${error?.message || String(error)}` }).catch(() => {});
     } finally {

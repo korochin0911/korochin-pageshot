@@ -2,6 +2,15 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createAudioRecorder, MAX_AUDIO_BYTES, MAX_AUDIO_DURATION_MS } from "../audio-recorder.js";
 import { createAudioService } from "../audio-service.js";
+import { webmFixture, cluster, simpleBlock } from "../test-support/webm-fixture.js";
+
+const firstChunk = () => new Blob([webmFixture().header, cluster(0, [simpleBlock()])]);
+const lastChunk = () => new Blob([cluster(30940, [simpleBlock()])]);
+function recordedDuration(bytes) {
+  const offset = Buffer.from(bytes).indexOf(Buffer.from([0x44, 0x89, 0x88]));
+  assert.ok(offset >= 0, "the saved recording must include Duration metadata");
+  return new DataView(bytes).getFloat64(offset + 3);
+}
 
 function recorderFixture({ failMedia = false, failResume = false, failStart = false, supported = true } = {}) {
   const statuses = [], results = [], requests = [], timers = new Map(), urls = new Map(), revoked = [];
@@ -34,7 +43,7 @@ function recorderFixture({ failMedia = false, failResume = false, failStart = fa
       assert.equal(this.state, "recording", "stop must never be called twice");
       this.state = "inactive";
       queueMicrotask(() => {
-        this.chunk(new Blob(["last-chunk"]));
+        this.chunk(lastChunk());
         this.dispatchEvent(new Event("stop"));
       });
     }
@@ -84,7 +93,7 @@ test("audio-only capture keeps playback audible and saves the final chunk exactl
   assert.deepEqual(f.requests, [{ audio: { mandatory: { chromeMediaSource: "tab", chromeMediaSourceId: "stream-42" } }, video: false }]);
   assert.equal(f.resources().connected, true);
   await assert.rejects(f.audio.start("another"), /すでに/);
-  f.recorder().chunk(new Blob(["first-chunk"]));
+  f.recorder().chunk(firstChunk());
   assert.equal(f.audio.stop(), true);
   assert.equal(f.audio.stop(), false);
   assert.equal(f.audio.status().state, "packaging");
@@ -92,7 +101,10 @@ test("audio-only capture keeps playback audible and saves the final chunk exactl
   assert.equal(f.results.length, 1);
   assert.equal(f.results[0].stopReason, "user");
   const blob = f.urls.get(f.results[0].url);
-  assert.equal(await blob.text(), "first-chunklast-chunk");
+  assert.equal(recordedDuration(await blob.arrayBuffer()), 31000);
+  assert.equal(f.results[0].warning, "");
+  const audioBytes = new Uint8Array(await blob.arrayBuffer());
+  assert.deepEqual(audioBytes.slice(-lastChunk().size), new Uint8Array(await lastChunk().arrayBuffer()));
   assert.equal(blob.type, "audio/webm;codecs=opus");
   assert.equal(f.audio.status(), null);
   assert.equal(f.timers.size, 0);
@@ -103,6 +115,7 @@ test("audio-only capture keeps playback audible and saves the final chunk exactl
   assert.equal(f.revoked.length, 1);
   f.track.readyState = "live";
   await f.audio.start("next");
+  f.recorder().chunk(firstChunk());
   f.audio.stop();
   await settled();
 });
@@ -111,7 +124,7 @@ test("closing a tab and hitting the duration or memory limit save a partial reco
   for (const reason of ["stream-ended", "duration-limit", "size-limit"]) {
     const f = recorderFixture();
     await f.audio.start("stream");
-    f.recorder().chunk(new Blob(["recorded-audio"]));
+    f.recorder().chunk(firstChunk());
     if (reason === "stream-ended") f.track.dispatchEvent(new Event("ended"));
     if (reason === "duration-limit") f.timers.get(MAX_AUDIO_DURATION_MS)();
     if (reason === "size-limit") {
@@ -132,12 +145,12 @@ test("an inactive recorder error still saves its final data and reports the warn
   const error = new Event("error");
   error.error = new Error("encoder failure");
   f.recorder().dispatchEvent(error);
-  f.recorder().chunk(new Blob(["partial"]));
+  f.recorder().chunk(new Blob([webmFixture().bytes]));
   f.recorder().dispatchEvent(new Event("stop"));
   await settled();
   assert.equal(f.results[0].stopReason, "recorder-error");
   assert.equal(f.results[0].warning, "encoder failure");
-  assert.equal(await f.urls.get(f.results[0].url).text(), "partial");
+  assert.equal(recordedDuration(await f.urls.get(f.results[0].url).arrayBuffer()), 31000);
 });
 
 test("unsupported capture and failed initialization release the stream and the recording lock", async () => {
@@ -163,6 +176,19 @@ test("an empty recording reports an error and releases resources", async () => {
   await settled();
   assert.equal(f.statuses.at(-1).state, "error");
   assert.equal(f.results.length, 0);
+  assert.equal(f.audio.status(), null);
+  assert.equal(f.resources().stopped, true);
+});
+
+test("unrecognized recorder output is saved intact with a visible compatibility warning", async () => {
+  const f = recorderFixture();
+  await f.audio.start("stream");
+  f.recorder().state = "inactive";
+  f.recorder().chunk(new Blob(["unexpected-browser-output"]));
+  f.recorder().dispatchEvent(new Event("stop"));
+  await settled();
+  assert.equal(await f.urls.get(f.results[0].url).text(), "unexpected-browser-output");
+  assert.match(f.results[0].warning, /再生時間情報を補完できませんでした/);
   assert.equal(f.audio.status(), null);
   assert.equal(f.resources().stopped, true);
 });
@@ -231,4 +257,10 @@ test("fast downloads, interrupted downloads, and failed saves clean up audio URL
   assert.equal((await f.service.save(recording)).ok, false);
   assert.ok(f.calls.some(([type]) => type === "release-audio"));
   assert.equal(f.statuses.at(-1).state, "error");
+});
+
+test("a successful download still displays any duration compatibility warning", async () => {
+  const f = serviceFixture();
+  assert.equal((await f.service.save({ ...recording, warning: "再生時間情報を補完できませんでした。" })).ok, true);
+  assert.match(f.statuses.at(-1).message, /再生時間情報を補完できませんでした/);
 });

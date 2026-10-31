@@ -38,9 +38,9 @@ export function createAudioService(api, publish, processAudio) {
         "stream-ended": "\nタブの共有終了までの音声を保存しました。",
         "duration-limit": "\n60分に達したため自動停止しました。",
         "size-limit": "\n音声が128MBに達したため自動停止しました。",
-        "recorder-error": `\n録音エラーが発生するまでの音声を保存しました。${result.warning || ""}`
+        "recorder-error": "\n録音エラーが発生するまでの音声を保存しました。"
       }[result.stopReason] || "";
-      await publish({ state: "started", mode: "audio", message: `音声のWebM保存を開始しました。${reason}\n${filename}` });
+      await publish({ state: "started", mode: "audio", message: `音声のWebM保存を開始しました。${reason}${result.warning ? `\n${result.warning}` : ""}\n${filename}` });
       return { ok: true, downloadId, filename };
     } catch (error) {
       if (downloadId === undefined) await processAudio("release-audio", { url: result.url }).catch(() => {});

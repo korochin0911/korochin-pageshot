@@ -50,6 +50,8 @@ The extension icon's badge shows `…` while processing, `WAIT` during the captu
 
 The format is WebM / Opus at a target bitrate of 128 kbps. Only the selected tab's audio is included; microphones, other tabs, and other applications are excluded. Silent periods remain silent in the recording. Use regular web pages; browser internal pages and protected content may prevent recording.
 
+When saving, the extension calculates duration from the encoded audio frame timestamps and lengths and writes it into the WebM metadata. This prevents upload tools from treating the recording length as unknown, without re-encoding the audio. If duration cannot be finalized, the original recording is still saved and a warning is shown.
+
 Closing the captured tab or ending sharing saves the audio collected so far. Recording also stops and saves automatically at 60 minutes or 128 MB to limit memory use. Other capture and copy operations are unavailable during recording. Stop and save before closing the browser or reloading the extension: unsaved recordings exist only in memory and cannot be recovered afterward.
 
 ## Frame sequences: sharing motion references with AI
@@ -144,13 +146,13 @@ Generate a ZIP containing only the files needed to run the extension:
 npm.cmd run package
 ```
 
-The output is `dist/korochin-pageshot-v1.3.0.zip`. The ZIP contains a versioned top-level folder. After extracting it, select that folder with **Load unpacked** in Chrome / Edge. Tests, GitHub Actions, and development files are excluded.
+The output is `dist/korochin-pageshot-v1.3.1.zip`. The ZIP contains a versioned top-level folder. After extracting it, select that folder with **Load unpacked** in Chrome / Edge. Tests, GitHub Actions, and development files are excluded.
 
 On GitHub, pushing a tag whose version matches `manifest.json` runs tests and syntax checks, then automatically creates a release with the ZIP attached.
 
 ```powershell
-git tag v1.3.0
-git push origin v1.3.0
+git tag v1.3.1
+git push origin v1.3.1
 ```
 
 If the tag version does not match `manifest.json`, the workflow fails to prevent an incorrect release. Before the next release, update `manifest.json` and `package.json` to the same version.
