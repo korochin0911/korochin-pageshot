@@ -31,6 +31,7 @@ $packageRoot = Join-Path $temporaryRoot $packageName
 
 $packageFiles = @(
   "README.md",
+  "README.en.md",
   "manifest.json",
   "background.js",
   "capture.js",
