@@ -2,6 +2,7 @@ import { createCaptureService, DESTINATIONS, MODES } from "./capture.js";
 import { copyDocumentTitleToClipboard, copyPngToClipboard } from "./clipboard.js";
 import { createExclusiveRunner, DEFAULT_SEQUENCE_OPTIONS } from "./sequence.js";
 import { createSequenceService } from "./sequence-service.js";
+import { createAudioService } from "./audio-service.js";
 
 const OFFSCREEN_DOCUMENT = "offscreen.html";
 let creatingOffscreenDocument;
@@ -17,7 +18,7 @@ async function ensureOffscreenDocument() {
     creatingOffscreenDocument = chrome.offscreen.createDocument({
       url: OFFSCREEN_DOCUMENT,
       reasons: ["BLOBS", "USER_MEDIA"],
-      justification: "撮影画像の検出・結合とタブ映像からの連番画像・ZIP生成のため"
+      justification: "撮影画像の検出・結合、連番画像・ZIP生成とタブ音声の録音のため"
     }).finally(() => { creatingOffscreenDocument = undefined; });
   }
   await creatingOffscreenDocument;
@@ -26,7 +27,7 @@ async function ensureOffscreenDocument() {
 async function processImage(type, payload) {
   await ensureOffscreenDocument();
   const result = await chrome.runtime.sendMessage({ target: "image-processor", type, ...payload });
-  if (!result?.ok) throw new Error(result?.error || "画像を処理できませんでした。");
+  if (!result?.ok) throw new Error(result?.error || "画像・音声を処理できませんでした。");
   return result.value;
 }
 
@@ -55,18 +56,29 @@ async function publishStatus(status) {
   await Promise.allSettled([
     chrome.storage.session.set({ captureStatus: { ...status, updatedAt: Date.now() } }),
     chrome.action.setBadgeText({ text: badge }),
-    chrome.action.setBadgeBackgroundColor({ color: status.state === "error" ? "#b42318" : "#136f63" }),
+    chrome.action.setBadgeBackgroundColor({ color: status.state === "error" || (status.mode === "audio" && status.state === "recording") ? "#b42318" : "#136f63" }),
     chrome.action.setTitle({ title: `Korochin PageShot — ${status.message}` })
   ]);
 }
 
 const capture = createCaptureService(chrome, publishStatus, () => Date.now(), copyImageToClipboard, imageProcessor);
-const exclusive = createExclusiveRunner();
+const runExclusive = createExclusiveRunner();
+// A recording outlives the service worker. Consult its offscreen owner instead
+// of relying solely on an in-memory lock after the worker wakes up again.
+const exclusive = (operation) => runExclusive(async () => {
+  const contexts = await chrome.runtime.getContexts({ contextTypes: ["OFFSCREEN_DOCUMENT"], documentUrls: [chrome.runtime.getURL(OFFSCREEN_DOCUMENT)] });
+  if (contexts.length && await processImage("get-audio-status", {})) {
+    return { ok: false, error: "音声録音を処理中です。停止・保存後に再試行してください。" };
+  }
+  return operation();
+});
 const sequence = createSequenceService(chrome, publishStatus, processImage);
+const audio = createAudioService(chrome, publishStatus, processImage);
 
 chrome.downloads.onChanged.addListener((delta) => {
   if (["complete", "interrupted"].includes(delta.state?.current)) {
     void sequence.releaseDownload(delta.id).catch(console.error);
+    void audio.releaseDownload(delta.id).catch(console.error);
   }
 });
 
@@ -110,11 +122,24 @@ chrome.commands.onCommand.addListener((command, tab) => {
 });
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (sender.id === chrome.runtime.id && sender.url === chrome.runtime.getURL(OFFSCREEN_DOCUMENT) && message?.target === "sequence-status") {
+  const fromOffscreen = sender.id === chrome.runtime.id && sender.url === chrome.runtime.getURL(OFFSCREEN_DOCUMENT);
+  if (fromOffscreen && message?.target === "audio-result") {
+    audio.save(message.result).then(sendResponse, (error) => sendResponse({ ok: false, error: String(error) }));
+    return true;
+  }
+  if (fromOffscreen && ["sequence-status", "audio-status"].includes(message?.target)) {
     publishStatus(message.status).then(() => sendResponse({ ok: true }));
     return true;
   }
   if (sender.id !== chrome.runtime.id || sender.url !== chrome.runtime.getURL("popup.html")) return;
+  if (message?.type === "audio-start") {
+    exclusive(() => audio.start()).then(sendResponse, (error) => sendResponse({ ok: false, error: String(error) }));
+    return true;
+  }
+  if (message?.type === "audio-stop") {
+    processImage("stop-audio", {}).then(() => sendResponse({ ok: true }), (error) => sendResponse({ ok: false, error: String(error) }));
+    return true;
+  }
   if (message?.type === "sequence-stop") {
     processImage("stop-sequence", {}).then(() => sendResponse({ ok: true }), (error) => sendResponse({ ok: false, error: String(error) }));
     return true;

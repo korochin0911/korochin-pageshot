@@ -1,5 +1,11 @@
 import { bandsAreRepeated, repetitionBands, repetitionOffsets } from "./image-analysis.js";
 import { recordSequence, releaseSequence, stopSequence } from "./sequence-recorder.js";
+import { createAudioRecorder } from "./audio-recorder.js";
+
+const audio = createAudioRecorder({
+  report: (status) => chrome.runtime.sendMessage({ target: "audio-status", status }),
+  onResult: (result) => chrome.runtime.sendMessage({ target: "audio-result", result })
+});
 
 async function loadImage(dataUrl) {
   const response = await fetch(dataUrl);
@@ -78,6 +84,20 @@ async function stitchTiles(tiles, dimensions) {
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (sender.id !== chrome.runtime.id || message?.target !== "image-processor") return;
+
+  if (["prepare-audio", "get-audio-status", "stop-audio", "release-audio"].includes(message.type)) {
+    if (message.type === "stop-audio") audio.stop();
+    if (message.type === "release-audio") audio.release(message.url);
+    sendResponse({ ok: true, value: audio.status() });
+    return;
+  }
+  if (message.type === "start-audio") {
+    audio.start(message.streamId, message.page).then(
+      (value) => sendResponse({ ok: true, value }),
+      (error) => sendResponse({ ok: false, error: error?.message || String(error) })
+    );
+    return true;
+  }
 
   if (["prepare-sequence", "stop-sequence", "release-sequence"].includes(message.type)) {
     if (message.type === "stop-sequence") stopSequence();

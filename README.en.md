@@ -2,7 +2,7 @@
 
 [日本語](README.md)
 
-A Manifest V3 extension for Chrome / Edge that saves web pages as PNG images, copies screenshots directly to the clipboard, or captures short movements as a ZIP of sequential WebP / PNG frames. Screenshots exclude the browser frame, including the tab bar and address bar. No build step or `npm install` is required.
+A Manifest V3 extension for Chrome / Edge that saves web pages as PNG images, copies screenshots directly to the clipboard, captures short movements as a ZIP of sequential WebP / PNG frames, and records tab audio as WebM. Screenshots exclude the browser frame, including the tab bar and address bar. No build step or `npm install` is required.
 
 The extension's interface and status messages are currently in Japanese. Japanese button labels are included below where needed.
 
@@ -40,7 +40,17 @@ screenshots/
 
 Timestamps use your computer's local time. If a filename already exists, the browser adds a number instead of overwriting it. The extension does not request a save dialog, but browser settings or management policies may still cause one to appear.
 
-The extension icon's badge shows `…` while processing, `WAIT` during the capture countdown, `REC` while recording frames, `↓` when a download starts, `✓` when copying to the clipboard succeeds, and `!` on failure. Click the icon for details. The `↓` badge does not guarantee that saving has finished. Check your browser's downloads list (Ctrl + J on Windows) to confirm completion or interruption.
+The extension icon's badge shows `…` while processing, `WAIT` during the capture countdown, `REC` while recording frames or audio (red for audio), `↓` when a download starts, `✓` when copying to the clipboard succeeds, and `!` on failure. Click the icon for details. The `↓` badge does not guarantee that saving has finished. Check your browser's downloads list (Ctrl + J on Windows) to confirm completion or interruption.
+
+## Recording tab audio
+
+1. In the tab whose audio you want to record, open the extension popup and click **録音開始** (Start recording) under **タブの音声** (Tab audio).
+2. The red `REC` badge indicates recording; reopen the popup to see elapsed time. Recording continues for the original tab after closing the popup or switching tabs. You can still hear the audio during recording.
+3. Reopen the popup and click **録音を停止して保存** (Stop recording and save). The recording is saved as `screenshots/audio-<timestamp>.webm`, using the recording start time.
+
+The format is WebM / Opus at a target bitrate of 128 kbps. Only the selected tab's audio is included; microphones, other tabs, and other applications are excluded. Silent periods remain silent in the recording. Use regular web pages; browser internal pages and protected content may prevent recording.
+
+Closing the captured tab or ending sharing saves the audio collected so far. Recording also stops and saves automatically at 60 minutes or 128 MB to limit memory use. Other capture and copy operations are unavailable during recording. Stop and save before closing the browser or reloading the extension: unsaved recordings exist only in memory and cannot be recovered afterward.
 
 ## Frame sequences: sharing motion references with AI
 
@@ -94,14 +104,14 @@ Chromium allows extensions to suggest default keys for up to four commands. As a
 | --- | --- |
 | activeTab | Capture the visible area of the tab where the user invokes the extension |
 | clipboardWrite | Write a captured PNG or page title to the clipboard |
-| downloads | Save PNG images and frame sequence ZIPs to the downloads folder |
-| tabCapture | Create frame sequences from a tab's video stream, started by a user action |
+| downloads | Save PNG images, frame sequence ZIPs, and WebM audio to the downloads folder |
+| tabCapture | Create frame sequences and record audio from a tab, started by a user action |
 | debugger | Capture the full page |
-| offscreen | Detect and stitch repeated image content, capture frame sequences, and create contact sheets and ZIPs |
+| offscreen | Detect and stitch repeated image content, capture frame sequences, create contact sheets and ZIPs, and record and play back tab audio |
 | scripting | Run image and title clipboard API calls on the active page when using shortcuts |
-| storage | Keep operation results and references to ZIPs being saved in session storage, and save frame sequence settings locally |
+| storage | Keep operation results and references to ZIPs and audio being saved in session storage, and save frame sequence settings locally |
 
-`debugger` is a powerful permission, and the browser displays a warning during installation. It is used only for capture operations. The extension makes no requests to external servers, uses no analytics services, and has no persistent content scripts. Images are passed to the downloads API or the operating system's clipboard and are not saved in history storage. Frame sequence ZIPs are temporarily kept in memory until the download completes or is interrupted. Capture metadata in each ZIP includes the page title and URL.
+`debugger` is a powerful permission, and the browser displays a warning during installation. It is used only for capture operations. The extension makes no requests to external servers, uses no analytics services, and has no persistent content scripts. Images are passed to the downloads API or the operating system's clipboard and are not saved in history storage. Frame sequence ZIPs and recorded audio are temporarily kept in memory until the download completes or is interrupted. Capture metadata in each ZIP includes the page title and URL.
 
 ## Verification
 
@@ -123,6 +133,8 @@ Automated tests mock the APIs to verify capture mode separation, the target wind
 7. Confirm that the debugger notification disappears after full-page capture and that the popup explains failures.
 8. Capture a moving page with the settings **3 seconds, 10 fps, WebP**. Confirm that the ZIP contains approximately 30 frames and three contact sheets, with matching order, timestamps, and motion. Also confirm that frame capture cannot run at the same time as a regular screenshot.
 9. Try PNG, different settings, the shortcut, cancellation during the countdown, stopping during capture, and closing the target tab. Confirm that settings persist when reopening the popup and that tab sharing stops after capture ends.
+10. Open `tests/audio-fixture.html`, click **音を再生** (Play sound), and start recording in the extension. Close the popup for about ten seconds; confirm audio remains audible, then reopen it to check elapsed time and stop. Play the saved WebM and verify it contains the test tone, without microphone or other-tab audio.
+11. Test switching tabs before stopping, closing the captured tab, and ending sharing from the browser. Record for over 30 seconds so the service worker can suspend, then confirm stopping and saving still work and capture/copy shortcuts cannot run during recording. Audio tests use mocks to check these operations, duration and size limits, recording/save errors, and resource cleanup.
 
 ## ZIP packages for GitHub Releases
 
@@ -132,13 +144,13 @@ Generate a ZIP containing only the files needed to run the extension:
 npm.cmd run package
 ```
 
-The output is `dist/korochin-pageshot-v1.2.1.zip`. The ZIP contains a versioned top-level folder. After extracting it, select that folder with **Load unpacked** in Chrome / Edge. Tests, GitHub Actions, and development files are excluded.
+The output is `dist/korochin-pageshot-v1.3.0.zip`. The ZIP contains a versioned top-level folder. After extracting it, select that folder with **Load unpacked** in Chrome / Edge. Tests, GitHub Actions, and development files are excluded.
 
 On GitHub, pushing a tag whose version matches `manifest.json` runs tests and syntax checks, then automatically creates a release with the ZIP attached.
 
 ```powershell
-git tag v1.2.1
-git push origin v1.2.1
+git tag v1.3.0
+git push origin v1.3.0
 ```
 
 If the tag version does not match `manifest.json`, the workflow fails to prevent an incorrect release. Before the next release, update `manifest.json` and `package.json` to the same version.

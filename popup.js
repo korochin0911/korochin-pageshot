@@ -4,8 +4,18 @@ const statusElement = document.querySelector("#status");
 const buttons = [...document.querySelectorAll(".capture")];
 const startButton = document.querySelector("#sequence-start");
 const stopButton = document.querySelector("#sequence-stop");
+const audioStartButton = document.querySelector("#audio-start");
+const audioStopButton = document.querySelector("#audio-stop");
+const audioElapsed = document.querySelector("#audio-elapsed");
 const settings = [...document.querySelectorAll(".sequence-settings select")];
 let currentStatus;
+
+function updateElapsed() {
+  if (currentStatus?.mode !== "audio" || currentStatus.state !== "recording") return;
+  const seconds = Math.max(0, Math.floor((Date.now() - currentStatus.startedAt) / 1000));
+  audioElapsed.textContent = `録音中 ${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
+}
+setInterval(updateElapsed, 1000);
 
 function showStatus(status) {
   if (!status) return;
@@ -14,15 +24,18 @@ function showStatus(status) {
   statusElement.classList.toggle("error", status.state === "error");
   const busy = ["capturing", "preparing", "countdown", "recording", "packaging"].includes(status.state);
   [...buttons, ...settings].forEach((item) => { item.disabled = busy; });
-  stopButton.hidden = !["countdown", "recording"].includes(status.state);
+  stopButton.hidden = status.mode !== "sequence" || !["countdown", "recording"].includes(status.state);
   stopButton.textContent = status.state === "countdown" ? "撮影をキャンセル" : "途中で停止して保存";
+  audioStopButton.hidden = status.mode !== "audio" || status.state !== "recording";
+  audioElapsed.hidden = audioStopButton.hidden;
+  updateElapsed();
 }
 
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area === "session" && changes.captureStatus) showStatus(changes.captureStatus.newValue);
 });
 
-for (const button of buttons.filter((item) => item !== startButton)) {
+for (const button of buttons.filter((item) => item !== startButton && item !== audioStartButton)) {
   button.addEventListener("click", async () => {
     buttons.forEach((item) => { item.disabled = true; });
     const copiesTitle = button.dataset.action === "copy-title";
@@ -73,6 +86,23 @@ startButton.addEventListener("click", async () => {
   } catch (error) { showStatus({ state: "error", message: error.message }); }
 });
 
+audioStartButton.addEventListener("click", async () => {
+  showStatus({ state: "preparing", mode: "audio", message: "音声録音を準備しています…" });
+  try {
+    const result = await chrome.runtime.sendMessage({ type: "audio-start" });
+    if (!result?.ok) throw new Error(result?.error || "音声録音を開始できませんでした。");
+  } catch (error) { showStatus({ state: "error", message: error.message }); }
+});
+
+audioStopButton.addEventListener("click", async () => {
+  audioStopButton.disabled = true;
+  try {
+    const result = await chrome.runtime.sendMessage({ type: "audio-stop" });
+    if (!result?.ok) throw new Error(result?.error || "録音を停止できませんでした。");
+  } catch (error) { showStatus({ state: "error", message: error.message }); }
+  finally { audioStopButton.disabled = false; }
+});
+
 stopButton.addEventListener("click", async () => {
   stopButton.disabled = true;
   try {
@@ -103,7 +133,7 @@ try {
   for (const command of ["capture-viewport", "copy-viewport", "capture-fullpage", "copy-fullpage", "copy-title", "capture-sequence"]) {
     document.querySelector(`#${command}-key`).textContent = commands.find((item) => item.name === command)?.shortcut || "未設定";
   }
-  showStatus(stored.captureStatus);
+  if (!currentStatus) showStatus(stored.captureStatus);
 } catch (error) {
   showStatus({ state: "error", message: error.message });
 }

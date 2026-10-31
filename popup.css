@@ -25,7 +25,8 @@ footer span { color: #63736c; font-size: 10px; }
 .sequence-settings label { display: flex; flex-direction: column; gap: 4px; font-size: 11px; }
 select { width: 100%; padding: 7px; border: 1px solid #82998a; border-radius: 6px; font: inherit; color: inherit; background: transparent; }
 select:focus-visible { outline: 3px solid #1a8878; outline-offset: 2px; }
-#sequence-stop { width: 100%; padding: 10px; margin-top: 8px; border: 1px solid #ba4938; border-radius: 8px; color: inherit; background: transparent; cursor: pointer; }
+#sequence-stop, #audio-stop { width: 100%; padding: 10px; margin-top: 8px; border: 1px solid #ba4938; border-radius: 8px; color: inherit; background: transparent; cursor: pointer; }
+#audio-elapsed { color: #b42318; font-variant-numeric: tabular-nums; }
 @media (prefers-color-scheme: dark) {
   :root { color: #e2ede7; background: #17221d; }
   .capture { background: #213128; border-color: #425b4a; }
@@ -35,5 +36,6 @@ select:focus-visible { outline: 3px solid #1a8878; outline-offset: 2px; }
   #status { background: #2a3e32; }
   #status.error { background: #4a241f; color: #ffb7a9; }
   .link, .mark { color: #73c6ab; }
+  #audio-elapsed { color: #ffb7a9; }
   footer { border-color: #425b4a; }
 }

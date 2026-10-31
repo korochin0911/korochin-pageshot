@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="ja">
+<meta charset="utf-8">
+<title>PageShot 音声録音確認ページ</title>
+<style>
+  body { max-width: 680px; margin: 60px auto; padding: 24px; font: 18px/1.7 sans-serif; }
+  button { padding: 12px 20px; font: inherit; }
+</style>
+<h1>音声録音の確認</h1>
+<p>「音を再生」で440Hzの小さなテスト音を鳴らします。拡張の「録音開始」で取り込み、「録音を停止して保存」でWebMに保存してください。録音中も音が聞こえることを確認します。</p>
+<button id="play">音を再生</button>
+<button id="stop" disabled>音を止める</button>
+<p id="status" role="status">停止中</p>
+<script>
+  let output, oscillator;
+  document.querySelector("#play").addEventListener("click", async () => {
+    output = new AudioContext();
+    await output.resume();
+    oscillator = output.createOscillator();
+    const gain = output.createGain();
+    gain.gain.value = 0.05;
+    oscillator.connect(gain).connect(output.destination);
+    oscillator.start();
+    document.querySelector("#play").disabled = true;
+    document.querySelector("#stop").disabled = false;
+    document.querySelector("#status").textContent = "440Hzを再生中";
+  });
+  document.querySelector("#stop").addEventListener("click", async () => {
+    oscillator.stop();
+    await output.close();
+    document.querySelector("#play").disabled = false;
+    document.querySelector("#stop").disabled = true;
+    document.querySelector("#status").textContent = "停止中";
+  });
+</script>
+</html>
